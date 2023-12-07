@@ -6,3 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+paste = "1.0.14"
+arbitrary-int = "1.2.6"
+rkyv = { version = "0.7.42", features = ["rend"] }
