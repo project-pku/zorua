@@ -1,28 +1,60 @@
-pub mod int {
+#![allow(non_camel_case_types)]
+
+pub mod transmute {
+    pub use zerocopy::{AsBytes, FromBytes, FromZeroes};
+}
+
+pub mod data_type {
     pub use arbitrary_int::*;
-    pub use rkyv::rend::{
-        char_be, char_le,
-        f32_be, f32_le, f64_be, f64_le,
-        i16_be, i32_be, i64_be, i128_be,
-        i16_le, i32_le, i64_le, i128_le,
-        u16_be, u32_be, u64_be, u128_be,
-        u16_le, u32_le, u64_le, u128_le,
-        NonZeroI16_be, NonZeroI32_be, NonZeroI64_be, NonZeroI128_be,
-        NonZeroI16_le, NonZeroI32_le, NonZeroI64_le, NonZeroI128_le,
-        NonZeroU16_be, NonZeroU32_be, NonZeroU64_be, NonZeroU128_be,
-        NonZeroU16_le, NonZeroU32_le, NonZeroU64_le, NonZeroU128_le,
-    };
+
+    // Little Endian
+    use zerocopy::little_endian;
+    pub type u16_le = little_endian::U16;
+    pub type u32_le = little_endian::U32;
+    pub type u64_le = little_endian::U64;
+    pub type u128_le = little_endian::U128;
+    pub type i16_le = little_endian::I16;
+    pub type i32_le = little_endian::I32;
+    pub type i64_le = little_endian::I64;
+    pub type i128_le = little_endian::I128;
+    pub type f32_le = little_endian::F32;
+    pub type f64_le = little_endian::F64;
+
+    // Big Endian
+    use zerocopy::big_endian;
+    pub type u16_be = big_endian::U16;
+    pub type u32_be = big_endian::U32;
+    pub type u64_be = big_endian::U64;
+    pub type u128_be = big_endian::U128;
+    pub type i16_be = big_endian::I16;
+    pub type i32_be = big_endian::I32;
+    pub type i64_be = big_endian::I64;
+    pub type i128_be = big_endian::I128;
+    pub type f32_be = big_endian::F32;
+    pub type f64_be = big_endian::F64;
 }
 
 #[macro_use]
 pub mod prelude {
-    pub use rkyv::Archive;
-    pub use crate::int::*;
+    pub use crate::data_type::*;
+    pub use crate::transmute::*;
     pub use paste::paste;
+
+    #[macro_export]
+    macro_rules! zorua_wrapper {
+        ($item: item) => {
+            #[repr(transparent)]
+            #[derive(
+                zerocopy::AsBytes, zerocopy::FromZeroes, zerocopy::FromBytes, Debug, PartialEq,
+            )]
+            $item
+        };
+    }
+    pub use zorua_wrapper;
 
     //TODO: currently unable to have bitfields in a different size range...
     #[macro_export]
-    macro_rules! zorua {
+    macro_rules! zorua_w_bitfields {
         (impl "$sf_impl", $f:ident, $sfv:vis, $sf:ident, $sfs:expr, bool) => {
             paste! {
                 $sfv fn $sf(&self) -> bool {
@@ -52,13 +84,21 @@ pub mod prelude {
         };
         (
             $(#[$struct_meta:meta])*
-            $sv:vis $struct_name:ident {
-            $($fv:vis $f:ident : $ft:ty,
-                $($(|$sfv:vis $sf:ident : $sfs:expr;$sft:tt,)+)?
-            )*
-        }) => {
+            $sv:vis struct $struct_name:ident {
+                $($fv:vis $f:ident : $ft:ty,
+                    $($(|$sfv:vis $sf:ident : $sfs:expr;$sft:tt,)+)?
+                )*
+            };
+        ) => {
                 // Define the struct
                 #[repr(C)]
+                #[derive(
+                    zerocopy::AsBytes,
+                    zerocopy::FromZeroes,
+                    zerocopy::FromBytes,
+                    Debug,
+                    PartialEq
+                )]
                 $(#[$struct_meta])*
                 $sv struct $struct_name {
                     $($fv $f: $ft),*
@@ -66,10 +106,10 @@ pub mod prelude {
                 // Generate the impl block
                 impl $struct_name {
                     $($($(
-                        zorua!(impl "$sf_impl", $f, $sfv, $sf, $sfs, $sft);
+                        zorua_w_bitfields!(impl "$sf_impl", $f, $sfv, $sf, $sfs, $sft);
                     )+)?)*
                 }
         };
     }
-    pub use zorua;
+    pub use zorua_w_bitfields;
 }

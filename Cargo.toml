@@ -8,4 +8,4 @@ edition = "2021"
 [dependencies]
 paste = "1.0.14"
 arbitrary-int = "1.2.6"
-rkyv = { version = "0.7.42", features = ["rend"] }
+zerocopy = { version = "~0.7.30", features = ["byteorder"] }
