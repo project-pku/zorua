@@ -40,6 +40,66 @@ pub mod prelude {
     pub use crate::transmute::*;
     pub use paste::paste;
 
+    //Macro helper traits
+    pub trait __zorua_internal_1 {
+        fn get(&self) -> &Self;
+    }
+    impl __zorua_internal_1 for u8 {
+        fn get(&self) -> &Self {
+            self
+        }
+    }
+    impl __zorua_internal_1 for u16 {
+        fn get(&self) -> &Self {
+            self
+        }
+    }
+    impl __zorua_internal_1 for u32 {
+        fn get(&self) -> &Self {
+            self
+        }
+    }
+    impl __zorua_internal_1 for u64 {
+        fn get(&self) -> &Self {
+            self
+        }
+    }
+    impl __zorua_internal_1 for u128 {
+        fn get(&self) -> &Self {
+            self
+        }
+    }
+    pub trait __zorua_internal_2 {
+        type backing;
+    }
+    impl __zorua_internal_2 for u8 {
+        type backing = u8;
+    }
+    impl __zorua_internal_2 for u16_le {
+        type backing = u16;
+    }
+    impl __zorua_internal_2 for u32_le {
+        type backing = u32;
+    }
+    impl __zorua_internal_2 for u64_le {
+        type backing = u64;
+    }
+    impl __zorua_internal_2 for u128_le {
+        type backing = u128;
+    }
+    impl __zorua_internal_2 for u16_be {
+        type backing = u16;
+    }
+    impl __zorua_internal_2 for u32_be {
+        type backing = u32;
+    }
+    impl __zorua_internal_2 for u64_be {
+        type backing = u64;
+    }
+    impl __zorua_internal_2 for u128_be {
+        type backing = u128;
+    }
+
     #[macro_export]
     macro_rules! zorua_wrapper {
         ($item: item) => {
@@ -52,36 +112,41 @@ pub mod prelude {
     }
     pub use zorua_wrapper;
 
-    //TODO: currently unable to have bitfields in a different size range...
     #[macro_export]
     macro_rules! zorua_w_bitfields {
-        (impl "$sf_impl", $f:ident, $sfv:vis, $sf:ident, $sfs:expr, bool) => {
+        //Subfield get/set implementations
+        (impl "$sf_impl", $f:ident, $ft:ty, $sfv:vis, $sf:ident, $sfs:expr, bool) => {
             paste! {
                 $sfv fn $sf(&self) -> bool {
                     let bitmask = 1 << $sfs;
-                    (self.$f & bitmask) != 0
+                    (self.$f.get() & bitmask) != 0
                 }
                 $sfv fn [<set_ $sf>](&mut self, val: bool) {
                     let bitmask = 1 << $sfs;
                     if val {
-                        self.$f |= bitmask;
+                        self.$f |= Into::<$ft>::into(bitmask);
                     } else {
-                        self.$f &= !bitmask;
+                        self.$f &= Into::<$ft>::into(!bitmask);
                     }
                 }
             }
         };
-        (impl "$sf_impl", $f:ident, $sfv:vis, $sf:ident, $sfs:expr, $sft:ty) => {
+        (impl "$sf_impl", $f:ident, $ft:ty, $sfv:vis, $sf:ident, $sfs:expr, $sft:ty) => {
             paste! {
                 $sfv fn $sf(&self) -> $sft {
-                    $sft::new((self.$f & $sft::MASK << $sfs) >> $sfs)
+                    $sft::new(
+                        ((self.$f.get() & (($sft::MASK as <$ft as __zorua_internal_2>::backing) << $sfs)) >> $sfs)
+                            as <$sft as Number>::UnderlyingType,
+                    )
                 }
                 $sfv fn [<set_ $sf>](&mut self, val: $sft) {
-                    self.$f &= !($sft::MASK << $sfs);
-                    self.$f |= val.value() << $sfs;
+                    self.$f |= Into::<$ft>::into((val.value() << $sfs) as <$ft as __zorua_internal_2>::backing);
+                    self.$f &= Into::<$ft>::into(!(($sft::MASK as <$ft as __zorua_internal_2>::backing) << $sfs));
                 }
             }
         };
+
+        //Regular struct macro
         (
             $(#[$struct_meta:meta])*
             $sv:vis struct $struct_name:ident {
@@ -106,7 +171,7 @@ pub mod prelude {
                 // Generate the impl block
                 impl $struct_name {
                     $($($(
-                        zorua_w_bitfields!(impl "$sf_impl", $f, $sfv, $sf, $sfs, $sft);
+                        zorua_w_bitfields!(impl "$sf_impl", $f, $ft, $sfv, $sf, $sfs, $sft);
                     )+)?)*
                 }
         };
