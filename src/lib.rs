@@ -101,19 +101,7 @@ pub mod prelude {
     }
 
     #[macro_export]
-    macro_rules! zorua_wrapper {
-        ($item: item) => {
-            #[repr(transparent)]
-            #[derive(
-                zerocopy::AsBytes, zerocopy::FromZeroes, zerocopy::FromBytes, Debug, PartialEq,
-            )]
-            $item
-        };
-    }
-    pub use zorua_wrapper;
-
-    #[macro_export]
-    macro_rules! zorua_w_bitfields {
+    macro_rules! zorua {
         //Subfield get/set implementations
         (impl "$sf_impl", $f:ident, $ft:ty, $sfv:vis, $sf:ident, $sfs:expr, bool) => {
             paste! {
@@ -156,7 +144,7 @@ pub mod prelude {
             };
         ) => {
                 // Define the struct
-                #[repr(C)]
+                $(#[$struct_meta])*
                 #[derive(
                     zerocopy::AsBytes,
                     zerocopy::FromZeroes,
@@ -164,17 +152,24 @@ pub mod prelude {
                     Debug,
                     PartialEq
                 )]
-                $(#[$struct_meta])*
                 $sv struct $struct_name {
                     $($fv $f: $ft),*
                 }
                 // Generate the impl block
                 impl $struct_name {
                     $($($(
-                        zorua_w_bitfields!(impl "$sf_impl", $f, $ft, $sfv, $sf, $sfs, $sft);
+                        zorua!(impl "$sf_impl", $f, $ft, $sfv, $sf, $sfs, $sft);
                     )+)?)*
                 }
         };
+
+        //Every other item (which should really just be tuple structs)
+        ($item: item) => {
+            #[derive(
+                zerocopy::AsBytes, zerocopy::FromZeroes, zerocopy::FromBytes, Debug, PartialEq,
+            )]
+            $item
+        };
     }
-    pub use zorua_w_bitfields;
+    pub use zorua;
 }
