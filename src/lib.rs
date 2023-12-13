@@ -151,7 +151,8 @@ pub mod prelude {
                     zerocopy::FromZeroes,
                     zerocopy::FromBytes,
                     Debug,
-                    PartialEq
+                    PartialEq,
+                    Clone,
                 )]
                 $sv struct $struct_name$(<$($lt $(:$clt$(+$dlt)*)?),+>)? {
                     $($fv $f: $ft),*
@@ -167,7 +168,12 @@ pub mod prelude {
         //Every other item (which should really just be tuple structs)
         ($item: item) => {
             #[derive(
-                zerocopy::AsBytes, zerocopy::FromZeroes, zerocopy::FromBytes, Debug, PartialEq,
+                zerocopy::AsBytes,
+                zerocopy::FromZeroes,
+                zerocopy::FromBytes,
+                Debug,
+                PartialEq,
+                Clone,
             )]
             $item
         };
