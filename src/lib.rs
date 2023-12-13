@@ -135,9 +135,10 @@ pub mod prelude {
         };
 
         //Regular struct macro
+        //Generic support courtesy of: https://stackoverflow.com/a/61189128/10910105
         (
             $(#[$struct_meta:meta])*
-            $sv:vis struct $struct_name:ident {
+            $sv:vis struct $struct_name:ident$(<$($lt:tt$(:$clt:tt$(+$dlt:tt)*)?),+>)? {
                 $($fv:vis $f:ident : $ft:ty,
                     $($(|$sfv:vis $sf:ident : $sfs:expr;$sft:tt,)+)?
                 )*
@@ -152,11 +153,11 @@ pub mod prelude {
                     Debug,
                     PartialEq
                 )]
-                $sv struct $struct_name {
+                $sv struct $struct_name$(<$($lt $(:$clt$(+$dlt)*)?),+>)? {
                     $($fv $f: $ft),*
                 }
                 // Generate the impl block
-                impl $struct_name {
+                impl$(<$($lt$(:$clt$(+$dlt)*)?),+>)? $struct_name$(<$($lt),+>)? {
                     $($($(
                         zorua!(impl "$sf_impl", $f, $ft, $sfv, $sf, $sfs, $sft);
                     )+)?)*
