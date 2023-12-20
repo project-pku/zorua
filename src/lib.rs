@@ -2,10 +2,39 @@ pub mod data_type {
     pub use arbitrary_int::*;
 }
 
+//Automates boilerplate for implementing swappable on int types
+macro_rules! impl_swappable_int {
+    ($($ty:ty),*) => {
+        $(
+            impl Swappable for $ty {
+                #[inline]
+                fn swap_bytes_mut(&mut self) {
+                    *self = (*self).swap_bytes();
+                }
+            }
+        )*
+    };
+}
+
 #[macro_use]
 pub mod prelude {
     pub use crate::data_type::*;
     pub use paste::paste;
+
+    pub trait Swappable {
+        fn swap_bytes_mut(&mut self);
+    }
+    impl Swappable for () {
+        fn swap_bytes_mut(&mut self) {}
+    }
+    impl_swappable_int!(u8, u16, u32, u64, u128, i8, i16, i32, i64, i128);
+    impl<const N: usize, T: Swappable> Swappable for [T; N] {
+        fn swap_bytes_mut(&mut self) {
+            self.iter_mut().for_each(|value| {
+                value.swap_bytes_mut();
+            });
+        }
+    }
 
     #[macro_export]
     macro_rules! zorua {
@@ -63,12 +92,49 @@ pub mod prelude {
                         zorua!(impl "$sf_impl", $f, $ft, $sfv, $sf, $sfs, $sft);
                     )+)?)*
                 }
+                impl$(<$($lt$(:$clt$(+$dlt)*)?),+>)? Swappable for $struct_name$(<$($lt),+>)? {
+                    fn swap_bytes_mut(&mut self) {
+                        $(self.$f.swap_bytes_mut();)*
+                    }
+                }
         };
 
-        //Every other item (which should really just be tuple structs)
-        ($item: item) => {
+        // single tuple struct w/ optional non-const generics
+        {
+            $(#[$struct_meta:meta])*
+            $sv:vis struct $struct_name:ident$(<$($lt:tt$(:$clt:tt$(+$dlt:tt)*)?),+>)? (
+                $fv:vis $ft:ty
+            );
+        }=> {
+            $(#[$struct_meta])*
             #[derive(Debug, PartialEq, Clone)]
-            $item
+            $sv struct $struct_name$(<$($lt:tt$(:$clt:tt$(+$dlt:tt)*)?),+>)? ($fv $ft);
+
+            impl$(<$($lt$(:$clt$(+$dlt)*)?),+>)? Swappable for $struct_name$(<$($lt),+>)? {
+                #[inline]
+                fn swap_bytes_mut(&mut self) {
+                    self.0.swap_bytes_mut();
+                }
+            }
+        };
+
+        // single tuple struct w/ single const generic
+        {
+            $(#[$struct_meta:meta])*
+            $sv:vis struct $struct_name:ident<const $N:ident : $Nt:ty> (
+                $fv:vis $ft:ty
+            );
+        }=> {
+            $(#[$struct_meta])*
+            #[derive(Debug, PartialEq, Clone)]
+            $sv struct $struct_name<const $N : $Nt> ($fv $ft);
+
+            impl<const $N: $Nt> Swappable for $struct_name<$N> {
+                #[inline]
+                fn swap_bytes_mut(&mut self) {
+                    self.0.swap_bytes_mut();
+                }
+            }
         };
     }
     pub use zorua;
