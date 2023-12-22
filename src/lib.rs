@@ -2,11 +2,11 @@ pub mod data_type {
     pub use arbitrary_int::*;
 }
 
-//Automates boilerplate for implementing swappable on int types
-macro_rules! impl_swappable_int {
+//Automates boilerplate for implementing Zorua on int types
+macro_rules! impl_zorua_int {
     ($($ty:ty),*) => {
         $(
-            impl Swappable for $ty {
+            impl Zorua for $ty {
                 #[inline]
                 fn swap_bytes_mut(&mut self) {
                     *self = (*self).swap_bytes();
@@ -21,14 +21,14 @@ pub mod prelude {
     pub use crate::data_type::*;
     pub use paste::paste;
 
-    pub trait Swappable {
+    pub trait Zorua {
         fn swap_bytes_mut(&mut self);
     }
-    impl Swappable for () {
+    impl Zorua for () {
         fn swap_bytes_mut(&mut self) {}
     }
-    impl_swappable_int!(u8, u16, u32, u64, u128, i8, i16, i32, i64, i128);
-    impl<const N: usize, T: Swappable> Swappable for [T; N] {
+    impl_zorua_int!(u8, u16, u32, u64, u128, i8, i16, i32, i64, i128);
+    impl<const N: usize, T: Zorua> Zorua for [T; N] {
         fn swap_bytes_mut(&mut self) {
             self.iter_mut().for_each(|value| {
                 value.swap_bytes_mut();
@@ -92,7 +92,7 @@ pub mod prelude {
                         zorua!(impl "$sf_impl", $f, $ft, $sfv, $sf, $sfs, $sft);
                     )+)?)*
                 }
-                impl$(<$($lt$(:$clt$(+$dlt)*)?),+>)? Swappable for $struct_name$(<$($lt),+>)? {
+                impl$(<$($lt$(:$clt$(+$dlt)*)?),+>)? Zorua for $struct_name$(<$($lt),+>)? {
                     fn swap_bytes_mut(&mut self) {
                         $(self.$f.swap_bytes_mut();)*
                     }
@@ -110,7 +110,7 @@ pub mod prelude {
             #[derive(Debug, PartialEq, Clone)]
             $sv struct $struct_name$(<$($lt:tt$(:$clt:tt$(+$dlt:tt)*)?),+>)? ($fv $ft);
 
-            impl$(<$($lt$(:$clt$(+$dlt)*)?),+>)? Swappable for $struct_name$(<$($lt),+>)? {
+            impl$(<$($lt$(:$clt$(+$dlt)*)?),+>)? Zorua for $struct_name$(<$($lt),+>)? {
                 #[inline]
                 fn swap_bytes_mut(&mut self) {
                     self.0.swap_bytes_mut();
@@ -129,7 +129,7 @@ pub mod prelude {
             #[derive(Debug, PartialEq, Clone)]
             $sv struct $struct_name<const $N : $Nt> ($fv $ft);
 
-            impl<const $N: $Nt> Swappable for $struct_name<$N> {
+            impl<const $N: $Nt> Zorua for $struct_name<$N> {
                 #[inline]
                 fn swap_bytes_mut(&mut self) {
                     self.0.swap_bytes_mut();
