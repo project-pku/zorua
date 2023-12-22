@@ -23,6 +23,20 @@ pub mod prelude {
 
     pub trait Zorua {
         fn swap_bytes_mut(&mut self);
+
+        fn to_le_mut(&mut self) {
+            //Assumption: All targets are either little or big endian.
+            #[cfg(target_endian = "big")] {
+                self.swap_bytes_mut();
+            }
+        }
+
+        fn to_be_mut(&mut self) {
+            //Assumption: All targets are either little or big endian.
+            #[cfg(target_endian = "little")] {
+                self.swap_bytes_mut();
+            }
+        }
     }
     impl Zorua for () {
         fn swap_bytes_mut(&mut self) {}
