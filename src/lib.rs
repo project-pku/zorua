@@ -156,7 +156,7 @@ pub mod prelude {
             $(#[$struct_meta:meta])*
             $sv:vis struct $struct_name:ident$(<$($lt:tt$(:$clt:tt$(+$dlt:tt)*)?),+>)? {
                 $($fv:vis $f:ident : $ft:ty,
-                    $($(|$sfv:vis $sf:ident : $sfs:expr;$sft:tt,)+)?
+                    $($(|$sfv:vis $sf:ident : $sft:tt@$sfs:literal,)+)?
                 )*
             };
         ) => {
