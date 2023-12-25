@@ -154,34 +154,34 @@ pub mod prelude {
         //Generic support courtesy of: https://stackoverflow.com/a/61189128/10910105
         (
             $(#[$struct_meta:meta])*
-            $sv:vis struct $struct_name:ident$(<$($lt:tt$(:$clt:tt$(+$dlt:tt)*)?),+>)? {
+            $sv:vis struct $s:ident$(<$($g:tt$(:$gt:tt$(+$gtx:tt)*)?),+>)? {
                 $($fv:vis $f:ident : $ft:ty,
-                    $($(|$sfv:vis $sf:ident : $sft:tt@$sfs:literal,)+)?
+                    $($(|$sfv:vis $sf:ident : $sft:tt@$sfi:literal,)+)?
                 )*
             };
         ) => {
                 // Define the struct
                 $(#[$struct_meta])*
                 #[derive(Debug, PartialEq, Clone)]
-                $sv struct $struct_name$(<$($lt $(:$clt$(+$dlt)*)?),+>)? {
+                $sv struct $s$(<$($g $(:$gt$(+$gtx)*)?),+>)? {
                     $($fv $f: $ft),*
                 }
                 // Generate the impl block
-                impl$(<$($lt$(:$clt$(+$dlt)*)?),+>)? $struct_name$(<$($lt),+>)? {
+                impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? $s$(<$($g),+>)? {
                     $($($(
                         paste! {
                             $sfv fn $sf(&self) -> $sft {
-                                let bit_repr = self.$f.get_bits::<<$sft as ZoruaBitField>::BitRepr, $sfs>();
+                                let bit_repr = self.$f.get_bits::<<$sft as ZoruaBitField>::BitRepr, $sfi>();
                                 <$sft as ZoruaBitField>::from_repr(bit_repr)
                             }
                             $sfv fn [<set_ $sf>](&mut self, val: $sft) {
                                 let bit_repr = val.to_repr();
-                                self.$f.set_bits::<<$sft as ZoruaBitField>::BitRepr, $sfs>(bit_repr);
+                                self.$f.set_bits::<<$sft as ZoruaBitField>::BitRepr, $sfi>(bit_repr);
                             }
                         }
                     )+)?)*
                 }
-                impl$(<$($lt$(:$clt$(+$dlt)*)?),+>)? ZoruaField for $struct_name$(<$($lt),+>)? {
+                impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? ZoruaField for $s$(<$($g),+>)? {
                     fn swap_bytes_mut(&mut self) {
                         $(self.$f.swap_bytes_mut();)*
                     }
@@ -191,15 +191,15 @@ pub mod prelude {
         // single tuple struct w/ optional non-const generics
         {
             $(#[$struct_meta:meta])*
-            $sv:vis struct $struct_name:ident$(<$($lt:tt$(:$clt:tt$(+$dlt:tt)*)?),+>)? (
+            $sv:vis struct $s:ident$(<$($g:tt$(:$gt:tt$(+$gtx:tt)*)?),+>)? (
                 $fv:vis $ft:ty
             );
         }=> {
             $(#[$struct_meta])*
             #[derive(Debug, PartialEq, Clone)]
-            $sv struct $struct_name$(<$($lt:tt$(:$clt:tt$(+$dlt:tt)*)?),+>)? ($fv $ft);
+            $sv struct $s$(<$($g:tt$(:$gt:tt$(+$gtx:tt)*)?),+>)? ($fv $ft);
 
-            impl$(<$($lt$(:$clt$(+$dlt)*)?),+>)? ZoruaField for $struct_name$(<$($lt),+>)? {
+            impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? ZoruaField for $s$(<$($g),+>)? {
                 #[inline]
                 fn swap_bytes_mut(&mut self) {
                     self.0.swap_bytes_mut();
@@ -210,15 +210,15 @@ pub mod prelude {
         // single tuple struct w/ single const generic
         {
             $(#[$struct_meta:meta])*
-            $sv:vis struct $struct_name:ident<const $N:ident : $Nt:ty> (
+            $sv:vis struct $s:ident<const $N:ident : $Nt:ty> (
                 $fv:vis $ft:ty
             );
         }=> {
             $(#[$struct_meta])*
             #[derive(Debug, PartialEq, Clone)]
-            $sv struct $struct_name<const $N : $Nt> ($fv $ft);
+            $sv struct $s<const $N : $Nt> ($fv $ft);
 
-            impl<const $N: $Nt> ZoruaField for $struct_name<$N> {
+            impl<const $N: $Nt> ZoruaField for $s<$N> {
                 #[inline]
                 fn swap_bytes_mut(&mut self) {
                     self.0.swap_bytes_mut();
