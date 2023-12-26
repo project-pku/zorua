@@ -1,5 +1,61 @@
 pub mod data_type {
+    use crate::prelude::{BackingBitField, BackingField, ZoruaBitField, ZoruaField};
     pub use arbitrary_int::*;
+    use std::fmt::{Debug, Formatter};
+
+    pub trait ZoruaFallible: Copy + Debug {
+        type ByteRepr: BackingField;
+        type BitRepr: BackingBitField;
+
+        fn is_valid(value: Self::ByteRepr) -> bool;
+    }
+
+    #[derive(Clone, Copy)]
+    pub union Fallible<T: ZoruaFallible> {
+        pub as_enum: T,
+        pub as_byte_repr: T::ByteRepr,
+        pub as_bit_repr: T::BitRepr,
+    }
+    impl<T: ZoruaFallible> Fallible<T> {
+        pub fn value_or_byte_repr(self) -> Result<T, T::ByteRepr> {
+            if T::is_valid(unsafe { self.as_byte_repr }) {
+                Ok(unsafe { self.as_enum })
+            } else {
+                Err(unsafe { self.as_byte_repr })
+            }
+        }
+        pub fn value_or_bit_repr(self) -> Result<T, T::BitRepr> {
+            if T::is_valid(unsafe { self.as_byte_repr }) {
+                Ok(unsafe { self.as_enum })
+            } else {
+                Err(unsafe { self.as_bit_repr })
+            }
+        }
+    }
+    impl<T: ZoruaFallible + PartialEq> PartialEq for Fallible<T> {
+        fn eq(&self, other: &Self) -> bool {
+            unsafe { self.as_byte_repr == other.as_byte_repr }
+        }
+    }
+    impl<T: ZoruaFallible + Debug> Debug for Fallible<T> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            self.value_or_byte_repr().fmt(f)
+        }
+    }
+    impl<T: ZoruaFallible> ZoruaField for Fallible<T> {
+        fn swap_bytes_mut(&mut self) {
+            T::ByteRepr::swap_bytes_mut(unsafe { &mut self.as_byte_repr })
+        }
+    }
+    impl<T: ZoruaFallible> ZoruaBitField for Fallible<T> {
+        type BitRepr = T::BitRepr;
+        fn to_repr(self) -> Self::BitRepr {
+            unsafe { self.as_bit_repr }
+        }
+        fn from_repr(value: Self::BitRepr) -> Self {
+            Fallible { as_bit_repr: value }
+        }
+    }
 }
 
 /// Automates boilerplate for implementing ZoruaField
@@ -101,7 +157,7 @@ pub mod prelude {
     }
 
     /// A special kind of [ZoruaField] that can house [ZoruaBitField]s.
-    pub trait BackingField: ZoruaField {
+    pub trait BackingField: ZoruaField + Copy + std::fmt::Debug + PartialEq {
         fn get_bits<T: BackingBitField, const INDEX: u32>(self) -> T
         where
             Self: From<T::ByteRepr> + TryInto<T::ByteRepr>;
@@ -137,7 +193,7 @@ pub mod prelude {
         /// Packs this type into its N bit [BitRepr][ZoruaBitField].
         fn from_repr(value: Self::BitRepr) -> Self;
     }
-    pub trait BackingBitField: ZoruaBitField {
+    pub trait BackingBitField: ZoruaBitField + Copy {
         type ByteRepr: BackingField;
         const MASK: Self::ByteRepr;
         fn to_backed(self) -> Self::ByteRepr;
@@ -164,7 +220,7 @@ pub mod prelude {
             $(#[$struct_meta:meta])*
             $sv:vis struct $s:ident$(<$($g:tt$(:$gt:tt$(+$gtx:tt)*)?),+>)? {
                 $($fv:vis $f:ident : $ft:ty,
-                    $($(|$sfv:vis $sf:ident : $sft:tt@$sfi:literal,)+)?
+                    $($(|$sfv:vis $sf:ident : $sft:tt$(<$sftg:tt>)?@$sfi:literal,)+)?
                 )*
             };
         ) => {
@@ -178,13 +234,13 @@ pub mod prelude {
                 impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? $s$(<$($g),+>)? {
                     $($($(
                         paste! {
-                            $sfv fn $sf(&self) -> $sft {
-                                let bit_repr = self.$f.get_bits::<<$sft as ZoruaBitField>::BitRepr, $sfi>();
-                                <$sft as ZoruaBitField>::from_repr(bit_repr)
+                            $sfv fn $sf(&self) -> $sft$(<$sftg>)? {
+                                let bit_repr = self.$f.get_bits::<<$sft$(<$sftg>)? as ZoruaBitField>::BitRepr, $sfi>();
+                                <$sft$(<$sftg>)? as ZoruaBitField>::from_repr(bit_repr)
                             }
-                            $sfv fn [<set_ $sf>](&mut self, val: $sft) {
+                            $sfv fn [<set_ $sf>](&mut self, val: $sft$(<$sftg>)?) {
                                 let bit_repr = val.to_repr();
-                                self.$f.set_bits::<<$sft as ZoruaBitField>::BitRepr, $sfi>(bit_repr);
+                                self.$f.set_bits::<<$sft$(<$sftg>)? as ZoruaBitField>::BitRepr, $sfi>(bit_repr);
                             }
                         }
                     )+)?)*
@@ -230,6 +286,94 @@ pub mod prelude {
                 #[inline]
                 fn swap_bytes_mut(&mut self) {
                     self.0.swap_bytes_mut();
+                }
+            }
+        };
+
+        // c-like byte exhaustive enum
+        {
+            =$byterepr:ty,
+            $(#[$struct_meta:meta])*
+            $ev:vis enum $e:ident {
+                $($v:ident $(=$vv:literal)?),*$(,)?
+            };
+        } => {
+            $(#[$struct_meta])*
+            #[derive(Debug, Clone, Copy, PartialEq)]
+            #[repr($byterepr)]
+            $ev enum $e {
+                $($v $(=$vv)?),*
+            }
+            impl ZoruaField for $e {
+                fn swap_bytes_mut(&mut self) {
+                    //must be safe because enum is exhaustive over repr
+                    <$byterepr as ZoruaField>::swap_bytes_mut(unsafe {std::mem::transmute(self)});
+                }
+            }
+            impl ZoruaBitField for $e {
+                type BitRepr = $byterepr;
+                fn to_repr(self) -> Self::BitRepr {
+                    Self::BitRepr::from_backed(self as <Self::BitRepr as BackingBitField>::ByteRepr)
+                }
+                fn from_repr(value: Self::BitRepr) -> Self {
+                    unsafe { std::mem::transmute(value.to_backed() as <Self::BitRepr as BackingBitField>::ByteRepr) }
+                }
+            }
+        };
+
+        // c-like bit exhaustive enum
+        {
+            =$bitrepr:ty, $byterepr:ty,
+            $(#[$struct_meta:meta])*
+            $ev:vis enum $e:ident {
+                $($v:ident $(= $vv:literal)?),*$(,)?
+            };
+        } => {
+            $(#[$struct_meta])*
+            #[repr($byterepr)]
+            #[derive(Debug, Clone, Copy, PartialEq)]
+            $ev enum $e {
+                $($v $(=$vv)?),*
+            }
+            impl ZoruaFallible for $e {
+                type BitRepr = $bitrepr;
+                type ByteRepr = $byterepr;
+
+                fn is_valid(value: Self::ByteRepr) -> bool {
+                    $(value == unsafe {std::mem::transmute($e::$v)})||*
+                }
+            }
+            impl ZoruaBitField for $e {
+                type BitRepr = $bitrepr;
+                fn to_repr(self) -> Self::BitRepr {
+                    Self::BitRepr::from_backed(self as <Self::BitRepr as BackingBitField>::ByteRepr)
+                }
+                fn from_repr(value: Self::BitRepr) -> Self {
+                    unsafe { std::mem::transmute(value.to_backed() as <Self::BitRepr as BackingBitField>::ByteRepr) }
+                }
+            }
+        };
+
+        // c-like non-exhaustive enum
+        {
+            $bitrepr:ty, $byterepr:ty,
+            $(#[$struct_meta:meta])*
+            $ev:vis enum $e:ident {
+                $($v:ident $(= $vv:literal)?),*$(,)?
+            };
+        } => {
+            $(#[$struct_meta])*
+            #[repr($byterepr)]
+            #[derive(Debug, Clone, Copy, PartialEq)]
+            $ev enum $e {
+                $($v $(=$vv)?),*
+            }
+            unsafe impl ZoruaFallible for $e {
+                type BitRepr = $bitrepr;
+                type ByteRepr = $byterepr;
+
+                fn is_valid(value: Self::ByteRepr) -> bool {
+                    $(value == unsafe {std::mem::transmute($e::$v)})||*
                 }
             }
         };
