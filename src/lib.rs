@@ -9,20 +9,20 @@ macro_rules! impl_backing {
         $(
             impl BackingField for $ty {
                 fn get_bits<T: BackingBitField, const INDEX: u32>(self) -> T
-                where Self: From<T::UnderlyingType> + TryInto<T::UnderlyingType> {
-                    T::new(
+                where Self: From<T::ByteRepr> + TryInto<T::ByteRepr> {
+                    T::from_backed(
                         ((self & (Into::<$ty>::into(T::MASK) << INDEX)) >> INDEX).try_into().unwrap_or_else(
                             |_| {
-                                panic!("Zorua Error: The BackedBitField::MASK of type {} must be wrong",
+                                panic!("Zorua Error: The BitRepr::MASK of type {} must be wrong",
                                     std::any::type_name::<$ty>())
                             }
                         )
                     )
                 }
                 fn set_bits<T: BackingBitField, const INDEX: u32>(&mut self, value: T)
-                where Self: From<T::UnderlyingType> + TryInto<T::UnderlyingType> {
+                where Self: From<T::ByteRepr> + TryInto<T::ByteRepr> {
                     *self &= !(Into::<$ty>::into(T::MASK) << INDEX);
-                    *self |= (Into::<$ty>::into(value.get_backed())) << INDEX;
+                    *self |= (Into::<$ty>::into(value.to_backed())) << INDEX;
                 }
             }
             impl ZoruaField for $ty {
@@ -45,9 +45,13 @@ macro_rules! impl_bit_backing {
                 fn from_repr(value: Self::BitRepr) -> Self { value }
             }
             impl BackingBitField for $ty {
-                const MASK: Self::UnderlyingType = <$ty>::MASK;
-                fn get_backed(self) -> Self::UnderlyingType {
+                type ByteRepr = <$ty as Number>::UnderlyingType;
+                const MASK: Self::ByteRepr = <$ty>::MASK;
+                fn to_backed(self) -> Self::ByteRepr {
                     self.value()
+                }
+                fn from_backed(value: Self::ByteRepr) -> Self {
+                    Self::new(value)
                 }
             }
         )*
@@ -60,8 +64,10 @@ macro_rules! impl_bit_backing {
                 fn from_repr(value: Self::BitRepr) -> Self { value }
             }
             impl BackingBitField for $ty {
-                const MASK: Self::UnderlyingType = <$ty>::MAX;
-                fn get_backed(self) -> Self::UnderlyingType { self }
+                type ByteRepr = Self;
+                const MASK: Self::ByteRepr = Self::MAX;
+                fn to_backed(self) -> Self::ByteRepr { self }
+                fn from_backed(value: Self::ByteRepr) -> Self { value }
             }
         )*
     };
@@ -98,11 +104,11 @@ pub mod prelude {
     pub trait BackingField: ZoruaField {
         fn get_bits<T: BackingBitField, const INDEX: u32>(self) -> T
         where
-            Self: From<T::UnderlyingType> + TryInto<T::UnderlyingType>;
+            Self: From<T::ByteRepr> + TryInto<T::ByteRepr>;
 
         fn set_bits<T: BackingBitField, const INDEX: u32>(&mut self, value: T)
         where
-            Self: From<T::UnderlyingType> + TryInto<T::UnderlyingType>;
+            Self: From<T::ByteRepr> + TryInto<T::ByteRepr>;
     }
     impl_backing!(u8, u16, u32, u64, u128);
     impl ZoruaField for bool {
@@ -131,9 +137,11 @@ pub mod prelude {
         /// Packs this type into its N bit [BitRepr][ZoruaBitField].
         fn from_repr(value: Self::BitRepr) -> Self;
     }
-    pub trait BackingBitField: ZoruaBitField + Number {
-        const MASK: Self::UnderlyingType;
-        fn get_backed(self) -> Self::UnderlyingType;
+    pub trait BackingBitField: ZoruaBitField {
+        type ByteRepr: BackingField;
+        const MASK: Self::ByteRepr;
+        fn to_backed(self) -> Self::ByteRepr;
+        fn from_backed(value: Self::ByteRepr) -> Self;
     }
     impl_bit_backing!("arbitrary", u1, u2, u3, u4, u5, u6, u7);
     impl_bit_backing!("native", u8, u16, u32, u64, u128);
