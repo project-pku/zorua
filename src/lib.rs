@@ -214,6 +214,35 @@ pub mod prelude {
 
     #[macro_export]
     macro_rules! zorua {
+        (impl "subfield_impl", $f:ident, $sfv:vis, $sf:ident, $sfi:literal, Fallible, $sftg:tt) => {
+            paste! {
+                $sfv fn $sf(&self) -> Result<$sftg, <$sftg as ZoruaFallible>::BitRepr> {
+                    let bit_repr = self.$f.get_bits::<<$sftg as ZoruaFallible>::BitRepr, $sfi>();
+                    <Fallible<$sftg> as ZoruaBitField>::from_repr(bit_repr).value_or_bit_repr()
+                }
+                $sfv fn [<set_ $sf>](&mut self, val: $sftg) {
+                    let val = Fallible {as_enum: val};
+                    let bit_repr = val.to_repr();
+                    self.$f.set_bits::<<$sftg as ZoruaFallible>::BitRepr, $sfi>(bit_repr);
+                }
+                $sfv fn [<set_ $sf _repr>](&mut self, val: <$sftg as ZoruaFallible>::BitRepr) {
+                    self.$f.set_bits::<<$sftg as ZoruaFallible>::BitRepr, $sfi>(val);
+                }
+            }
+        };
+        (impl "subfield_impl", $f:ident, $sfv:vis, $sf:ident, $sfi:literal, $sft:tt, $($sftg:tt)?) => {
+            paste! {
+                $sfv fn $sf(&self) -> $sft$(<$sftg>)? {
+                    let bit_repr = self.$f.get_bits::<<$sft$(<$sftg>)? as ZoruaBitField>::BitRepr, $sfi>();
+                    <$sft$(<$sftg>)? as ZoruaBitField>::from_repr(bit_repr)
+                }
+                $sfv fn [<set_ $sf>](&mut self, val: $sft$(<$sftg>)?) {
+                    let bit_repr = val.to_repr();
+                    self.$f.set_bits::<<$sft$(<$sftg>)? as ZoruaBitField>::BitRepr, $sfi>(bit_repr);
+                }
+            }
+        };
+
         //Regular struct macro
         //Generic support courtesy of: https://stackoverflow.com/a/61189128/10910105
         (
@@ -233,16 +262,7 @@ pub mod prelude {
                 // Generate the impl block
                 impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? $s$(<$($g),+>)? {
                     $($($(
-                        paste! {
-                            $sfv fn $sf(&self) -> $sft$(<$sftg>)? {
-                                let bit_repr = self.$f.get_bits::<<$sft$(<$sftg>)? as ZoruaBitField>::BitRepr, $sfi>();
-                                <$sft$(<$sftg>)? as ZoruaBitField>::from_repr(bit_repr)
-                            }
-                            $sfv fn [<set_ $sf>](&mut self, val: $sft$(<$sftg>)?) {
-                                let bit_repr = val.to_repr();
-                                self.$f.set_bits::<<$sft$(<$sftg>)? as ZoruaBitField>::BitRepr, $sfi>(bit_repr);
-                            }
-                        }
+                        zorua!(impl "subfield_impl", $f, $sfv, $sf, $sfi, $sft, $($sftg)?);
                     )+)?)*
                 }
                 impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? ZoruaField for $s$(<$($g),+>)? {
