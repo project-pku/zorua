@@ -32,6 +32,11 @@ pub mod data_type {
             }
         }
     }
+    impl<T: ZoruaFallible> From<T> for Fallible<T> {
+        fn from(value: T) -> Self {
+            Fallible { as_enum: value }
+        }
+    }
     impl<T: ZoruaFallible + PartialEq> PartialEq for Fallible<T> {
         fn eq(&self, other: &Self) -> bool {
             unsafe { self.as_byte_repr == other.as_byte_repr }
@@ -220,13 +225,9 @@ pub mod prelude {
                     let bit_repr = self.$f.get_bits::<<$sftg as ZoruaFallible>::BitRepr, $sfi>();
                     <Fallible<$sftg> as ZoruaBitField>::from_repr(bit_repr).value_or_bit_repr()
                 }
-                $sfv fn [<set_ $sf>](&mut self, val: $sftg) {
-                    let val = Fallible {as_enum: val};
+                $sfv fn [<set_ $sf>](&mut self, val: Fallible<$sftg>) {
                     let bit_repr = val.to_repr();
-                    self.$f.set_bits::<<$sftg as ZoruaFallible>::BitRepr, $sfi>(bit_repr);
-                }
-                $sfv fn [<set_ $sf _repr>](&mut self, val: <$sftg as ZoruaFallible>::BitRepr) {
-                    self.$f.set_bits::<<$sftg as ZoruaFallible>::BitRepr, $sfi>(val);
+                    self.$f.set_bits::<<Fallible<$sftg> as ZoruaBitField>::BitRepr, $sfi>(bit_repr);
                 }
             }
         };
