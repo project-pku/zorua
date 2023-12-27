@@ -75,10 +75,10 @@ macro_rules! impl_backing {
     ($($ty:ty),*) => {
         $(
             impl BackingField for $ty {
-                fn get_bits<T: BackingBitField, const INDEX: u32>(self) -> T
+                fn get_bits<T: BackingBitField>(self, index: usize) -> T
                 where Self: From<T::ByteRepr> + TryInto<T::ByteRepr> {
                     T::from_backed(
-                        ((self & (Into::<$ty>::into(T::MASK) << INDEX)) >> INDEX).try_into().unwrap_or_else(
+                        ((self & (Into::<$ty>::into(T::MASK) << index)) >> index).try_into().unwrap_or_else(
                             |_| {
                                 panic!("Zorua Error: The BitRepr::MASK of type {} must be wrong",
                                     std::any::type_name::<$ty>())
@@ -86,10 +86,10 @@ macro_rules! impl_backing {
                         )
                     )
                 }
-                fn set_bits<T: BackingBitField, const INDEX: u32>(&mut self, value: T)
+                fn set_bits<T: BackingBitField>(&mut self, value: T, index: usize)
                 where Self: From<T::ByteRepr> + TryInto<T::ByteRepr> {
-                    *self &= !(Into::<$ty>::into(T::MASK) << INDEX);
-                    *self |= (Into::<$ty>::into(value.to_backed())) << INDEX;
+                    *self &= !(Into::<$ty>::into(T::MASK) << index);
+                    *self |= (Into::<$ty>::into(value.to_backed())) << index;
                 }
             }
             impl ZoruaField for $ty {
@@ -169,11 +169,11 @@ pub mod prelude {
 
     /// A special kind of [ZoruaField] that can house [ZoruaBitField]s.
     pub trait BackingField: ZoruaField + Copy + std::fmt::Debug + PartialEq {
-        fn get_bits<T: BackingBitField, const INDEX: u32>(self) -> T
+        fn get_bits<T: BackingBitField>(self, index: usize) -> T
         where
             Self: From<T::ByteRepr> + TryInto<T::ByteRepr>;
 
-        fn set_bits<T: BackingBitField, const INDEX: u32>(&mut self, value: T)
+        fn set_bits<T: BackingBitField>(&mut self, value: T, index: usize)
         where
             Self: From<T::ByteRepr> + TryInto<T::ByteRepr>;
     }
@@ -225,15 +225,29 @@ pub mod prelude {
 
     #[macro_export]
     macro_rules! zorua {
+        //array bitfields
+        (impl "subfield_impl", $f:ident, $sfv:vis, $sf:ident, $sfi:literal, [$sft:tt;$sfl:literal],) => {
+            paste! {
+                $sfv fn $sf(&self, index: usize) -> $sft {
+                    let bit_repr = self.$f.get_bits::<<$sft as ZoruaBitField>::BitRepr>($sfi+<$sft as ZoruaBitField>::BitRepr::BITS as usize*index);
+                    <$sft as ZoruaBitField>::from_repr(bit_repr)
+                }
+                $sfv fn [<set_ $sf>](&mut self, val: $sft, index: usize) {
+                    let bit_repr = val.to_repr();
+                    self.$f.set_bits::<<$sft as ZoruaBitField>::BitRepr>(bit_repr, $sfi+<$sft as ZoruaBitField>::BitRepr::BITS as usize*index);
+                }
+            }
+        };
+        //all other bitfields
         (impl "subfield_impl", $f:ident, $sfv:vis, $sf:ident, $sfi:literal, $sft:tt, $($sftg:tt)?) => {
             paste! {
                 $sfv fn $sf(&self) -> $sft$(<$sftg>)? {
-                    let bit_repr = self.$f.get_bits::<<$sft$(<$sftg>)? as ZoruaBitField>::BitRepr, $sfi>();
+                    let bit_repr = self.$f.get_bits::<<$sft$(<$sftg>)? as ZoruaBitField>::BitRepr>($sfi);
                     <$sft$(<$sftg>)? as ZoruaBitField>::from_repr(bit_repr)
                 }
                 $sfv fn [<set_ $sf>](&mut self, val: $sft$(<$sftg>)?) {
                     let bit_repr = val.to_repr();
-                    self.$f.set_bits::<<$sft$(<$sftg>)? as ZoruaBitField>::BitRepr, $sfi>(bit_repr);
+                    self.$f.set_bits::<<$sft$(<$sftg>)? as ZoruaBitField>::BitRepr>(bit_repr, $sfi);
                 }
             }
         };
