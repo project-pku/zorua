@@ -31,6 +31,12 @@ pub mod data_type {
                 Err(unsafe { self.as_bit_repr })
             }
         }
+        pub fn as_byte_repr(self) -> T::ByteRepr {
+            unsafe { self.as_byte_repr }
+        }
+        pub fn as_bit_repr(self) -> T::BitRepr {
+            unsafe { self.as_bit_repr }
+        }
     }
     impl<T: ZoruaFallible> From<T> for Fallible<T> {
         fn from(value: T) -> Self {
@@ -39,7 +45,7 @@ pub mod data_type {
     }
     impl<T: ZoruaFallible + PartialEq> PartialEq for Fallible<T> {
         fn eq(&self, other: &Self) -> bool {
-            unsafe { self.as_byte_repr == other.as_byte_repr }
+            self.as_byte_repr() == other.as_byte_repr()
         }
     }
     impl<T: ZoruaFallible + Debug> Debug for Fallible<T> {
@@ -55,7 +61,7 @@ pub mod data_type {
     impl<T: ZoruaFallible> ZoruaBitField for Fallible<T> {
         type BitRepr = T::BitRepr;
         fn to_repr(self) -> Self::BitRepr {
-            unsafe { self.as_bit_repr }
+            self.as_bit_repr()
         }
         fn from_repr(value: Self::BitRepr) -> Self {
             Fallible { as_bit_repr: value }
@@ -219,18 +225,6 @@ pub mod prelude {
 
     #[macro_export]
     macro_rules! zorua {
-        (impl "subfield_impl", $f:ident, $sfv:vis, $sf:ident, $sfi:literal, Fallible, $sftg:tt) => {
-            paste! {
-                $sfv fn $sf(&self) -> Result<$sftg, <$sftg as ZoruaFallible>::BitRepr> {
-                    let bit_repr = self.$f.get_bits::<<$sftg as ZoruaFallible>::BitRepr, $sfi>();
-                    <Fallible<$sftg> as ZoruaBitField>::from_repr(bit_repr).value_or_bit_repr()
-                }
-                $sfv fn [<set_ $sf>](&mut self, val: Fallible<$sftg>) {
-                    let bit_repr = val.to_repr();
-                    self.$f.set_bits::<<Fallible<$sftg> as ZoruaBitField>::BitRepr, $sfi>(bit_repr);
-                }
-            }
-        };
         (impl "subfield_impl", $f:ident, $sfv:vis, $sf:ident, $sfi:literal, $sft:tt, $($sftg:tt)?) => {
             paste! {
                 $sfv fn $sf(&self) -> $sft$(<$sftg>)? {
@@ -373,6 +367,12 @@ pub mod prelude {
                     unsafe { std::mem::transmute(value.to_backed() as <Self::BitRepr as BackingBitField>::ByteRepr) }
                 }
             }
+            impl TryInto<$e> for Fallible<$e> {
+                type Error = $byterepr;
+                fn try_into(self) -> Result<$e, $byterepr> {
+                    self.value_or_byte_repr()
+                }
+            }
         };
 
         // c-like non-exhaustive enum
@@ -395,6 +395,12 @@ pub mod prelude {
 
                 fn is_valid(value: Self::ByteRepr) -> bool {
                     $(value == unsafe {std::mem::transmute($e::$v)})||*
+                }
+            }
+            impl TryInto<$e> for Fallible<$e> {
+                type Error = $byterepr;
+                fn try_into(self) -> Result<$e, $byterepr> {
+                    self.value_or_byte_repr()
                 }
             }
         };
