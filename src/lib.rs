@@ -178,9 +178,6 @@ pub mod prelude {
             Self: From<T::ByteRepr> + TryInto<T::ByteRepr>;
     }
     impl_backing!(u8, u16, u32, u64, u128);
-    impl ZoruaField for bool {
-        fn swap_bytes_mut(&mut self) {}
-    }
     impl ZoruaField for () {
         fn swap_bytes_mut(&mut self) {}
     }
