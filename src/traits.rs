@@ -6,7 +6,7 @@ macro_rules! impl_backing {
     ($($ty:ty),*) => {
         $(
             impl BackingField for $ty {
-                fn get_bits<T: BackingBitField>(self, index: usize) -> T
+                fn get_bits_at<T: BackingBitField>(self, index: usize) -> T
                 where Self: From<T::ByteRepr> + TryInto<T::ByteRepr> {
                     T::from_backed(
                         ((self & (Into::<$ty>::into(T::MASK) << index)) >> index).try_into().unwrap_or_else(
@@ -17,7 +17,7 @@ macro_rules! impl_backing {
                         )
                     )
                 }
-                fn set_bits<T: BackingBitField>(&mut self, value: T, index: usize)
+                fn set_bits_at<T: BackingBitField>(&mut self, value: T, index: usize)
                 where Self: From<T::ByteRepr> + TryInto<T::ByteRepr> {
                     *self &= !(Into::<$ty>::into(T::MASK) << index);
                     *self |= (Into::<$ty>::into(value.to_backed())) << index;
@@ -39,8 +39,8 @@ macro_rules! impl_bit_backing {
         $(
             impl ZoruaBitField for $ty {
                 type BitRepr = Self;
-                fn to_repr(self) -> Self::BitRepr { self }
-                fn from_repr(value: Self::BitRepr) -> Self { value }
+                fn to_bit_repr(self) -> Self::BitRepr { self }
+                fn from_bit_repr(value: Self::BitRepr) -> Self { value }
             }
             impl BackingBitField for $ty {
                 type ByteRepr = <$ty as Number>::UnderlyingType;
@@ -58,8 +58,8 @@ macro_rules! impl_bit_backing {
         $(
             impl ZoruaBitField for $ty {
                 type BitRepr = Self;
-                fn to_repr(self) -> Self::BitRepr { self }
-                fn from_repr(value: Self::BitRepr) -> Self { value }
+                fn to_bit_repr(self) -> Self::BitRepr { self }
+                fn from_bit_repr(value: Self::BitRepr) -> Self { value }
             }
             impl BackingBitField for $ty {
                 type ByteRepr = Self;
@@ -95,11 +95,11 @@ pub trait ZoruaField {
 
 /// A special kind of [ZoruaField] that can house [ZoruaBitField]s.
 pub trait BackingField: ZoruaField + Copy + std::fmt::Debug + PartialEq {
-    fn get_bits<T: BackingBitField>(self, index: usize) -> T
+    fn get_bits_at<T: BackingBitField>(self, index: usize) -> T
     where
         Self: From<T::ByteRepr> + TryInto<T::ByteRepr>;
 
-    fn set_bits<T: BackingBitField>(&mut self, value: T, index: usize)
+    fn set_bits_at<T: BackingBitField>(&mut self, value: T, index: usize)
     where
         Self: From<T::ByteRepr> + TryInto<T::ByteRepr>;
 }
@@ -124,10 +124,10 @@ pub trait ZoruaBitField {
     type BitRepr: BackingBitField;
 
     /// Returns a copy of this type as its N bit [BitRepr][ZoruaBitField].
-    fn to_repr(self) -> Self::BitRepr;
+    fn to_bit_repr(self) -> Self::BitRepr;
 
     /// Packs this type into its N bit [BitRepr][ZoruaBitField].
-    fn from_repr(value: Self::BitRepr) -> Self;
+    fn from_bit_repr(value: Self::BitRepr) -> Self;
 }
 
 pub trait BackingBitField: ZoruaBitField + Copy {
@@ -142,10 +142,10 @@ impl_bit_backing!("native", u8, u16, u32, u64, u128);
 
 impl ZoruaBitField for bool {
     type BitRepr = u1;
-    fn to_repr(self) -> Self::BitRepr {
+    fn to_bit_repr(self) -> Self::BitRepr {
         u1::new(if self { 1 } else { 0 })
     }
-    fn from_repr(value: Self::BitRepr) -> Self {
+    fn from_bit_repr(value: Self::BitRepr) -> Self {
         value == u1::MAX
     }
 }

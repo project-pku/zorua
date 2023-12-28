@@ -13,12 +13,12 @@ pub mod prelude {
         (impl "subfield_impl", $f:ident, $sfv:vis, $sf:ident, $sfi:literal, [$sft:tt;$sfl:literal],) => {
             paste! {
                 $sfv fn $sf(&self, index: usize) -> $sft {
-                    let bit_repr = self.$f.get_bits::<<$sft as ZoruaBitField>::BitRepr>($sfi+<$sft as ZoruaBitField>::BitRepr::BITS as usize*index);
-                    <$sft as ZoruaBitField>::from_repr(bit_repr)
+                    let bit_repr = self.$f.get_bits_at::<<$sft as ZoruaBitField>::BitRepr>($sfi+<$sft as ZoruaBitField>::BitRepr::BITS as usize*index);
+                    <$sft as ZoruaBitField>::from_bit_repr(bit_repr)
                 }
                 $sfv fn [<set_ $sf>](&mut self, val: $sft, index: usize) {
-                    let bit_repr = val.to_repr();
-                    self.$f.set_bits::<<$sft as ZoruaBitField>::BitRepr>(bit_repr, $sfi+<$sft as ZoruaBitField>::BitRepr::BITS as usize*index);
+                    let bit_repr = val.to_bit_repr();
+                    self.$f.set_bits_at::<<$sft as ZoruaBitField>::BitRepr>(bit_repr, $sfi+<$sft as ZoruaBitField>::BitRepr::BITS as usize*index);
                 }
             }
         };
@@ -26,12 +26,12 @@ pub mod prelude {
         (impl "subfield_impl", $f:ident, $sfv:vis, $sf:ident, $sfi:literal, $sft:tt, $($sftg:tt)?) => {
             paste! {
                 $sfv fn $sf(&self) -> $sft$(<$sftg>)? {
-                    let bit_repr = self.$f.get_bits::<<$sft$(<$sftg>)? as ZoruaBitField>::BitRepr>($sfi);
-                    <$sft$(<$sftg>)? as ZoruaBitField>::from_repr(bit_repr)
+                    let bit_repr = self.$f.get_bits_at::<<$sft$(<$sftg>)? as ZoruaBitField>::BitRepr>($sfi);
+                    <$sft$(<$sftg>)? as ZoruaBitField>::from_bit_repr(bit_repr)
                 }
                 $sfv fn [<set_ $sf>](&mut self, val: $sft$(<$sftg>)?) {
-                    let bit_repr = val.to_repr();
-                    self.$f.set_bits::<<$sft$(<$sftg>)? as ZoruaBitField>::BitRepr>(bit_repr, $sfi);
+                    let bit_repr = val.to_bit_repr();
+                    self.$f.set_bits_at::<<$sft$(<$sftg>)? as ZoruaBitField>::BitRepr>(bit_repr, $sfi);
                 }
             }
         };
@@ -125,10 +125,10 @@ pub mod prelude {
             }
             impl ZoruaBitField for $e {
                 type BitRepr = $byterepr;
-                fn to_repr(self) -> Self::BitRepr {
+                fn to_bit_repr(self) -> Self::BitRepr {
                     Self::BitRepr::from_backed(self as <Self::BitRepr as BackingBitField>::ByteRepr)
                 }
-                fn from_repr(value: Self::BitRepr) -> Self {
+                fn from_bit_repr(value: Self::BitRepr) -> Self {
                     unsafe { std::mem::transmute(value.to_backed() as <Self::BitRepr as BackingBitField>::ByteRepr) }
                 }
             }
@@ -158,10 +158,10 @@ pub mod prelude {
             }
             impl ZoruaBitField for $e {
                 type BitRepr = $bitrepr;
-                fn to_repr(self) -> Self::BitRepr {
+                fn to_bit_repr(self) -> Self::BitRepr {
                     Self::BitRepr::from_backed(self as <Self::BitRepr as BackingBitField>::ByteRepr)
                 }
-                fn from_repr(value: Self::BitRepr) -> Self {
+                fn from_bit_repr(value: Self::BitRepr) -> Self {
                     unsafe { std::mem::transmute(value.to_backed() as <Self::BitRepr as BackingBitField>::ByteRepr) }
                 }
             }

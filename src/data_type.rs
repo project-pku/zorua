@@ -48,10 +48,10 @@ impl<T: ZoruaFallible> ZoruaField for Fallible<T> {
 
 impl<T: ZoruaFallible> ZoruaBitField for Fallible<T> {
     type BitRepr = T::BitRepr;
-    fn to_repr(self) -> Self::BitRepr {
+    fn to_bit_repr(self) -> Self::BitRepr {
         self.as_bit_repr()
     }
-    fn from_repr(value: Self::BitRepr) -> Self {
+    fn from_bit_repr(value: Self::BitRepr) -> Self {
         Fallible { as_bit_repr: value }
     }
 }
