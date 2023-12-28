@@ -74,8 +74,11 @@ macro_rules! impl_bit_backing {
 //------------- Field trait + impls -------------
 /// A type that can be used within a ZoruaStruct.
 pub trait ZoruaField {
+    /// Swaps the byte order of self in-place.
     fn swap_bytes_mut(&mut self);
 
+    /// Swaps the byte order of self in-place iff the target is big endian
+    /// (is a no-op on little endian targets).
     fn to_le_mut(&mut self) {
         //Assumption: All targets are either little or big endian.
         #[cfg(target_endian = "big")]
@@ -84,6 +87,8 @@ pub trait ZoruaField {
         }
     }
 
+    /// Swaps the byte order of self in-place iff the target is little endian
+    /// (is a no-op on big endian targets).
     fn to_be_mut(&mut self) {
         //Assumption: All targets are either little or big endian.
         #[cfg(target_endian = "little")]
@@ -94,6 +99,8 @@ pub trait ZoruaField {
 }
 
 /// A special kind of [ZoruaField] that can house [ZoruaBitField]s.
+///
+/// (Practically speaking, just the built-in uints.)
 pub trait BackingField: ZoruaField + Copy + std::fmt::Debug + PartialEq {
     fn get_bits_at<T: BackingBitField>(self, index: usize) -> T
     where
