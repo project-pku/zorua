@@ -11,6 +11,9 @@ To use `zorua` add the following dependency to your `Cargo.toml`:
 zorua = { git = "https://github.com/project-pku/zorua.git", tag="v0.2" }
 ```
 
+> [!WARNING]  
+> This crate currently uses **nightly**!
+
 ## Types
 ### Zorua structs
 Zorua structs are the main feature of the crate. To create one simply import the `prelude` module and use the `zorua!` macro:
