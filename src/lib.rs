@@ -1,3 +1,6 @@
+#![feature(generic_const_exprs)]
+#![allow(incomplete_features)]
+
 pub mod data_type;
 pub mod traits;
 
@@ -5,6 +8,7 @@ pub mod traits;
 pub mod prelude {
     pub use crate::data_type::*;
     pub use crate::traits::*;
+    pub use aligned::*;
     pub use paste::paste;
 
     #[macro_export]
@@ -39,6 +43,7 @@ pub mod prelude {
         //Regular struct macro
         //Generic support courtesy of: https://stackoverflow.com/a/61189128/10910105
         (
+            #[align($align:ty)]
             $(#[$struct_meta:meta])*
             $sv:vis struct $s:ident$(<$($g:tt$(:$gt:tt$(+$gtx:tt)*)?),+>)? {
                 $($fv:vis $f:ident : $ft:ty,
@@ -57,6 +62,9 @@ pub mod prelude {
                     $($($(
                         zorua!(impl "subfield_impl", $f, $sfv, $sf, $sfi, $sft, $($sftg)?);
                     )+)?)*
+                }
+                impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? ZoruaStruct for $s$(<$($g),+>)? {
+                    type Alignment = $align;
                 }
                 impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? ZoruaField for $s$(<$($g),+>)? {
                     fn swap_bytes_mut(&mut self) {

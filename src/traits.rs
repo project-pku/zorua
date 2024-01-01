@@ -1,4 +1,5 @@
 use crate::data_type::*;
+use aligned::*;
 
 /// Automates boilerplate for implementing ZoruaField
 /// and BackingField on built-in int types
@@ -69,6 +70,25 @@ macro_rules! impl_bit_backing {
             }
         )*
     };
+}
+
+pub trait ZoruaStruct: ZoruaField + Sized {
+    type Alignment;
+
+    fn as_bytes(&self) -> &Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]> {
+        unsafe { std::mem::transmute(self) }
+    }
+    fn as_bytes_mut(&mut self) -> &mut Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]> {
+        unsafe { std::mem::transmute(self) }
+    }
+    fn from_bytes(bytes: &Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]>) -> &Self {
+        unsafe { std::mem::transmute(bytes) }
+    }
+    fn from_bytes_mut(
+        bytes: &mut Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]>,
+    ) -> &mut Self {
+        unsafe { std::mem::transmute(bytes) }
+    }
 }
 
 //------------- Field trait + impls -------------
