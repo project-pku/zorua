@@ -12,7 +12,7 @@ pub mod prelude {
     pub use paste::paste;
 
     #[macro_export]
-    macro_rules! zorua {
+    macro_rules! zorua_struct {
         //array bitfields
         (impl "subfield_impl", $f:ident, $sfv:vis, $sf:ident, $sfi:literal, [$sft:tt;$sfl:literal],) => {
             paste! {
@@ -43,16 +43,16 @@ pub mod prelude {
         //Regular struct macro
         //Generic support courtesy of: https://stackoverflow.com/a/61189128/10910105
         (
-            #[align($align:ty)]
             $(#[$struct_meta:meta])*
-            $sv:vis struct $s:ident$(<$($g:tt$(:$gt:tt$(+$gtx:tt)*)?),+>)? {
+            $sv:vis struct $s:ident$(<$($g:tt$(:$gt:tt$(+$gtx:tt)*)?),+>)?: $align:ty {
                 $($fv:vis $f:ident : $ft:ty,
                     $($(|$sfv:vis $sf:ident : $sft:tt$(<$sftg:tt>)?@$sfi:literal,)+)?
                 )*
-            };
+            }
         ) => {
                 // Define the struct
                 $(#[$struct_meta])*
+                #[repr(C)]
                 #[derive(Debug, PartialEq, Clone)]
                 $sv struct $s$(<$($g $(:$gt$(+$gtx)*)?),+>)? {
                     $($fv $f: $ft),*
@@ -60,7 +60,7 @@ pub mod prelude {
                 // Generate the impl block
                 impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? $s$(<$($g),+>)? {
                     $($($(
-                        zorua!(impl "subfield_impl", $f, $sfv, $sf, $sfi, $sft, $($sftg)?);
+                        zorua_struct!(impl "subfield_impl", $f, $sfv, $sf, $sfi, $sft, $($sftg)?);
                     )+)?)*
                 }
                 impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? ZoruaStruct for $s$(<$($g),+>)? {
@@ -91,15 +91,20 @@ pub mod prelude {
                 }
             }
         };
+    }
+    pub use zorua_struct;
 
+    #[macro_export]
+    macro_rules! zorua_field {
         // single tuple struct w/ single const generic
         {
             $(#[$struct_meta:meta])*
             $sv:vis struct $s:ident<const $N:ident : $Nt:ty> (
                 $fv:vis $ft:ty
-            );
+            )
         }=> {
             $(#[$struct_meta])*
+            #[repr(transparent)]
             #[derive(Debug, PartialEq, Clone)]
             $sv struct $s<const $N : $Nt> ($fv $ft);
 
@@ -117,7 +122,7 @@ pub mod prelude {
             $(#[$struct_meta:meta])*
             $ev:vis enum $e:ident {
                 $($v:ident $(=$vv:literal)?),*$(,)?
-            };
+            }
         } => {
             $(#[$struct_meta])*
             #[derive(Debug, Clone, Copy, PartialEq)]
@@ -148,7 +153,7 @@ pub mod prelude {
             $(#[$struct_meta:meta])*
             $ev:vis enum $e:ident {
                 $($v:ident $(= $vv:literal)?),*$(,)?
-            };
+            }
         } => {
             $(#[$struct_meta])*
             #[repr($byterepr)]
@@ -187,7 +192,7 @@ pub mod prelude {
             $(#[$struct_meta:meta])*
             $ev:vis enum $e:ident {
                 $($v:ident $(= $vv:literal)?),*$(,)?
-            };
+            }
         } => {
             $(#[$struct_meta])*
             #[repr($byterepr)]
@@ -211,5 +216,5 @@ pub mod prelude {
             }
         };
     }
-    pub use zorua;
+    pub use zorua_field;
 }
