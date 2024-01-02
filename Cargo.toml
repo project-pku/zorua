@@ -7,5 +7,5 @@ edition = "2021"
 
 [dependencies]
 paste = "1.0.14"
-arbitrary-int = "1.2.6"
 aligned = "0.4.1"
+ux2 = "0.8.5"

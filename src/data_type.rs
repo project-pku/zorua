@@ -1,7 +1,7 @@
 use crate::traits::{BackingBitField, BackingField, ZoruaBitField, ZoruaField};
 use std::fmt::{Debug, Formatter};
 
-pub use arbitrary_int::*;
+pub use ux2::{u1, u2, u3, u4, u5, u6, u7};
 
 pub trait ZoruaFallible: Copy + Debug {
     type ByteRepr: BackingField;
