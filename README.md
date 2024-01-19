@@ -8,7 +8,7 @@ To use `zorua` add the following dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-zorua = { git = "https://github.com/project-pku/zorua.git", tag="v0.1" }
+zorua = { git = "https://github.com/project-pku/zorua.git", tag="v0.2" }
 ```
 
 ## Types
