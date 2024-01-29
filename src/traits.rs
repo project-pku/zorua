@@ -1,6 +1,8 @@
 use crate::data_type::*;
 use aligned::*;
 
+pub use zorua_macro::ZoruaField;
+
 /// Automates boilerplate for implementing ZoruaField
 /// and BackingField on built-in int types
 macro_rules! impl_backing {

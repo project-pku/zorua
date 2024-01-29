@@ -95,27 +95,7 @@ pub mod prelude {
     pub use zorua_struct;
 
     #[macro_export]
-    macro_rules! zorua_field {
-        // single tuple struct w/ single const generic
-        {
-            $(#[$struct_meta:meta])*
-            $sv:vis struct $s:ident<const $N:ident : $Nt:ty> (
-                $fv:vis $ft:ty
-            )
-        }=> {
-            $(#[$struct_meta])*
-            #[repr(transparent)]
-            #[derive(Debug, PartialEq, Clone)]
-            $sv struct $s<const $N : $Nt> ($fv $ft);
-
-            impl<const $N: $Nt> ZoruaField for $s<$N> {
-                #[inline]
-                fn swap_bytes_mut(&mut self) {
-                    self.0.swap_bytes_mut();
-                }
-            }
-        };
-
+    macro_rules! zorua_enum {
         //Zorua Enum field common impl
         (impl "common", $($struct_meta:meta)*, $ev:vis, $e:ident, $byterepr:ty, $($v:ident $(=$vv:literal)?),*) => {
             $(#[$struct_meta])*
@@ -160,8 +140,8 @@ pub mod prelude {
                 $($v:ident $(=$vv:literal)?),*$(,)?
             }
         } => {
-            zorua_field!(impl "common", $($struct_meta)*, $ev, $e, $byterepr, $($v $(=$vv)?),*);
-            zorua_field!(impl "bitfield", $e, $byterepr);
+            zorua_enum!(impl "common", $($struct_meta)*, $ev, $e, $byterepr, $($v $(=$vv)?),*);
+            zorua_enum!(impl "bitfield", $e, $byterepr);
             impl ZoruaField for $e {
                 fn swap_bytes_mut(&mut self) {
                     //must be safe because enum is exhaustive over repr
@@ -177,9 +157,9 @@ pub mod prelude {
                 $($v:ident $(= $vv:literal)?),*$(,)?
             }
         } => {
-            zorua_field!(impl "common", $($struct_meta)*, $ev, $e, $byterepr, $($v $(=$vv)?),*);
-            zorua_field!(impl "fallible", $e, $bitrepr, $byterepr, $($v),*);
-            zorua_field!(impl "bitfield", $e, $bitrepr);
+            zorua_enum!(impl "common", $($struct_meta)*, $ev, $e, $byterepr, $($v $(=$vv)?),*);
+            zorua_enum!(impl "fallible", $e, $bitrepr, $byterepr, $($v),*);
+            zorua_enum!(impl "bitfield", $e, $bitrepr);
         };
 
         // c-like byte non-exhaustive enum
@@ -189,8 +169,8 @@ pub mod prelude {
                 $($v:ident $(= $vv:literal)?),*$(,)?
             }
         } => {
-            zorua_field!(impl "common", $($struct_meta)*, $ev, $e, $byterepr, $($v $(=$vv)?),*);
-            zorua_field!(impl "fallible", $e, $byterepr, $byterepr, $($v),*);
+            zorua_enum!(impl "common", $($struct_meta)*, $ev, $e, $byterepr, $($v $(=$vv)?),*);
+            zorua_enum!(impl "fallible", $e, $byterepr, $byterepr, $($v),*);
         };
 
         // c-like bit non-exhaustive enum
@@ -200,9 +180,9 @@ pub mod prelude {
                 $($v:ident $(= $vv:literal)?),*$(,)?
             }
         } => {
-            zorua_field!(impl "common", $($struct_meta)*, $ev, $e, $byterepr, $($v $(=$vv)?),*);
-            zorua_field!(impl "fallible", $e, $bitrepr, $byterepr, $($v),*);
+            zorua_enum!(impl "common", $($struct_meta)*, $ev, $e, $byterepr, $($v $(=$vv)?),*);
+            zorua_enum!(impl "fallible", $e, $bitrepr, $byterepr, $($v),*);
         };
     }
-    pub use zorua_field;
+    pub use zorua_enum;
 }
