@@ -62,33 +62,12 @@ pub mod prelude {
                         zorua_struct!(impl "subfield_impl", $f, $sfv, $sf, $sfi, $sft, $($sftg1, $sftg2)?);
                     )+)?)*
                 }
-                impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? ZoruaStruct for $s$(<$($g),+>)? {
-                    type Alignment = $align;
-                }
                 impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? ZoruaField for $s$(<$($g),+>)? {
+                    type Alignment = $align;
                     fn swap_bytes_mut(&mut self) {
                         $(self.$f.swap_bytes_mut();)*
                     }
                 }
-        };
-
-        // single tuple struct w/ optional non-const generics
-        {
-            $(#[$struct_meta:meta])*
-            $sv:vis struct $s:ident$(<$($g:tt$(:$gt:tt$(+$gtx:tt)*)?),+>)? (
-                $fv:vis $ft:ty
-            );
-        }=> {
-            $(#[$struct_meta])*
-            #[derive(Debug, PartialEq, Clone)]
-            $sv struct $s$(<$($g:tt$(:$gt:tt$(+$gtx:tt)*)?),+>)? ($fv $ft);
-
-            impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? ZoruaField for $s$(<$($g),+>)? {
-                #[inline]
-                fn swap_bytes_mut(&mut self) {
-                    self.0.swap_bytes_mut();
-                }
-            }
         };
     }
     pub use zorua_struct;
@@ -143,6 +122,7 @@ pub mod prelude {
             zorua_enum!(impl "common", $($struct_meta)*, $ev, $e, $byterepr, $($v $(=$vv)?),*);
             zorua_enum!(impl "bitfield", $e, $byterepr);
             impl ZoruaField for $e {
+                type Alignment = A1; //assumption, no way they fill up a u16+
                 fn swap_bytes_mut(&mut self) {
                     //must be safe because enum is exhaustive over repr
                     <$byterepr as ZoruaField>::swap_bytes_mut(unsafe {std::mem::transmute(self)});

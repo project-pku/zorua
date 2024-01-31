@@ -5,7 +5,7 @@ pub use zorua_macro::ZoruaField;
 /// Automates boilerplate for implementing ZoruaField
 /// and BackingField on built-in int types
 macro_rules! impl_backing {
-    ($($ty:ty),*) => {
+    ($(($ty:ty, $align:ty)),*) => {
         $(
             impl BackingField for $ty {
                 fn get_bits_at<T: BackingBitField>(self, index: usize) -> T
@@ -26,6 +26,7 @@ macro_rules! impl_backing {
                 }
             }
             impl ZoruaField for $ty {
+                type Alignment = $align;
                 fn swap_bytes_mut(&mut self) {
                     *self = (*self).swap_bytes();
                 }
@@ -73,28 +74,11 @@ macro_rules! impl_bit_backing {
     };
 }
 
-pub trait ZoruaStruct: ZoruaField + Sized {
-    type Alignment: Alignment;
-
-    fn as_bytes(&self) -> &Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]> {
-        unsafe { std::mem::transmute(self) }
-    }
-    fn as_bytes_mut(&mut self) -> &mut Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]> {
-        unsafe { std::mem::transmute(self) }
-    }
-    fn from_bytes(bytes: &Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]>) -> &Self {
-        unsafe { std::mem::transmute(bytes) }
-    }
-    fn from_bytes_mut(
-        bytes: &mut Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]>,
-    ) -> &mut Self {
-        unsafe { std::mem::transmute(bytes) }
-    }
-}
-
 //------------- Field trait + impls -------------
 /// A type that can be used within a ZoruaStruct.
-pub trait ZoruaField {
+pub trait ZoruaField: Sized {
+    type Alignment: Alignment;
+
     /// Swaps the byte order of self in-place.
     fn swap_bytes_mut(&mut self);
 
@@ -117,6 +101,21 @@ pub trait ZoruaField {
             self.swap_bytes_mut();
         }
     }
+
+    fn as_bytes(&self) -> &Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]> {
+        unsafe { std::mem::transmute(self) }
+    }
+    fn as_bytes_mut(&mut self) -> &mut Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]> {
+        unsafe { std::mem::transmute(self) }
+    }
+    fn from_bytes(bytes: &Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]>) -> &Self {
+        unsafe { std::mem::transmute(bytes) }
+    }
+    fn from_bytes_mut(
+        bytes: &mut Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]>,
+    ) -> &mut Self {
+        unsafe { std::mem::transmute(bytes) }
+    }
 }
 
 /// A special kind of [ZoruaField] that can house [ZoruaBitField]s.
@@ -132,13 +131,16 @@ pub trait BackingField: ZoruaField + Copy + std::fmt::Debug + PartialEq {
         Self: From<T::ByteRepr> + TryInto<T::ByteRepr>;
 }
 
-impl_backing!(u8, u16, u32, u64, u128);
+impl_backing!((u8, A1), (u16, A2), (u32, A4), (u64, A8), (u128, A16));
 
 impl ZoruaField for () {
+    type Alignment = A1;
     fn swap_bytes_mut(&mut self) {}
 }
 
 impl<const N: usize, T: ZoruaField> ZoruaField for [T; N] {
+    type Alignment = T::Alignment;
+
     fn swap_bytes_mut(&mut self) {
         self.iter_mut().for_each(|value| {
             value.swap_bytes_mut();
