@@ -8,7 +8,6 @@ pub mod traits;
 pub mod prelude {
     pub use crate::data_type::*;
     pub use crate::traits::*;
-    pub use aligned::*;
     pub use paste::paste;
 
     #[macro_export]

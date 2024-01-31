@@ -1,5 +1,4 @@
 use crate::data_type::*;
-use aligned::*;
 
 pub use zorua_macro::ZoruaField;
 
@@ -75,7 +74,7 @@ macro_rules! impl_bit_backing {
 }
 
 pub trait ZoruaStruct: ZoruaField + Sized {
-    type Alignment;
+    type Alignment: Alignment;
 
     fn as_bytes(&self) -> &Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]> {
         unsafe { std::mem::transmute(self) }
