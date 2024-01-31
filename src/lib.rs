@@ -11,7 +11,7 @@ pub mod prelude {
     pub use paste::paste;
 
     #[macro_export]
-    macro_rules! zorua_struct {
+    macro_rules! bitfields {
         //array bitfields
         (impl "subfield_impl", $f:ident, $sfv:vis, $sf:ident, $sfi:literal, [$sft:tt;$sfl:literal],) => {
             paste! {
@@ -43,7 +43,7 @@ pub mod prelude {
         //Generic support courtesy of: https://stackoverflow.com/a/61189128/10910105
         (
             $(#[$struct_meta:meta])*
-            $sv:vis struct $s:ident$(<$($g:tt$(:$gt:tt$(+$gtx:tt)*)?),+>)?: $align:ty {
+            $sv:vis struct $s:ident$(<$($g:tt$(:$gt:tt$(+$gtx:tt)*)?),+>)? {
                 $($fv:vis $f:ident : $ft:ty,
                     $($(|$sfv:vis $sf:ident : $sft:tt$(<$sftg1:tt, $sftg2:tt>)?@$sfi:literal,)+)?
                 )*
@@ -51,26 +51,18 @@ pub mod prelude {
         ) => {
                 // Define the struct
                 $(#[$struct_meta])*
-                #[repr(C)]
-                #[derive(Debug, PartialEq, Clone)]
                 $sv struct $s$(<$($g $(:$gt$(+$gtx)*)?),+>)? {
                     $($fv $f: $ft),*
                 }
                 // Generate the impl block
                 impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? $s$(<$($g),+>)? {
                     $($($(
-                        zorua_struct!(impl "subfield_impl", $f, $sfv, $sf, $sfi, $sft, $($sftg1, $sftg2)?);
+                        bitfields!(impl "subfield_impl", $f, $sfv, $sf, $sfi, $sft, $($sftg1, $sftg2)?);
                     )+)?)*
-                }
-                impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? ZoruaField for $s$(<$($g),+>)? {
-                    type Alignment = $align;
-                    fn swap_bytes_mut(&mut self) {
-                        $(self.$f.swap_bytes_mut();)*
-                    }
                 }
         };
     }
-    pub use zorua_struct;
+    pub use bitfields;
 
     #[macro_export]
     macro_rules! zorua_enum {
