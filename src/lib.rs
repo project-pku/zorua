@@ -26,15 +26,15 @@ pub mod prelude {
             }
         };
         //all other bitfields
-        (impl "subfield_impl", $f:ident, $sfv:vis, $sf:ident, $sfi:literal, $sft:tt, $($sftg:tt)?) => {
+        (impl "subfield_impl", $f:ident, $sfv:vis, $sf:ident, $sfi:literal, $sft:tt, $($sftg1:tt, $sftg2:tt)?) => {
             paste! {
-                $sfv fn $sf(&self) -> $sft$(<$sftg>)? {
-                    let bit_repr = self.$f.get_bits_at::<<$sft$(<$sftg>)? as ZoruaBitField>::BitRepr>($sfi);
-                    <$sft$(<$sftg>)? as ZoruaBitField>::from_bit_repr(bit_repr)
+                $sfv fn $sf(&self) -> $sft$(<$sftg1, $sftg2>)? {
+                    let bit_repr = self.$f.get_bits_at::<<$sft$(<$sftg1, $sftg2>)? as ZoruaBitField>::BitRepr>($sfi);
+                    <$sft$(<$sftg1, $sftg2>)? as ZoruaBitField>::from_bit_repr(bit_repr)
                 }
-                $sfv fn [<set_ $sf>](&mut self, val: $sft$(<$sftg>)?) {
+                $sfv fn [<set_ $sf>](&mut self, val: $sft$(<$sftg1, $sftg2>)?) {
                     let bit_repr = val.to_bit_repr();
-                    self.$f.set_bits_at::<<$sft$(<$sftg>)? as ZoruaBitField>::BitRepr>(bit_repr, $sfi);
+                    self.$f.set_bits_at::<<$sft$(<$sftg1, $sftg2>)? as ZoruaBitField>::BitRepr>(bit_repr, $sfi);
                 }
             }
         };
@@ -45,7 +45,7 @@ pub mod prelude {
             $(#[$struct_meta:meta])*
             $sv:vis struct $s:ident$(<$($g:tt$(:$gt:tt$(+$gtx:tt)*)?),+>)?: $align:ty {
                 $($fv:vis $f:ident : $ft:ty,
-                    $($(|$sfv:vis $sf:ident : $sft:tt$(<$sftg:tt>)?@$sfi:literal,)+)?
+                    $($(|$sfv:vis $sf:ident : $sft:tt$(<$sftg1:tt, $sftg2:tt>)?@$sfi:literal,)+)?
                 )*
             }
         ) => {
@@ -59,7 +59,7 @@ pub mod prelude {
                 // Generate the impl block
                 impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? $s$(<$($g),+>)? {
                     $($($(
-                        zorua_struct!(impl "subfield_impl", $f, $sfv, $sf, $sfi, $sft, $($sftg)?);
+                        zorua_struct!(impl "subfield_impl", $f, $sfv, $sf, $sfi, $sft, $($sftg1, $sftg2)?);
                     )+)?)*
                 }
                 impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? ZoruaStruct for $s$(<$($g),+>)? {
@@ -104,19 +104,20 @@ pub mod prelude {
                 $($v $(=$vv)?),*
             }
         };
-        (impl "fallible", $e:ident, $bitrepr:ty, $byterepr:ty, $($v:ident),*) => {
-            impl ZoruaFallible for $e {
-                type BitRepr = $bitrepr;
-                type ByteRepr = $byterepr;
-
-                fn is_valid(value: Self::ByteRepr) -> bool {
+        (impl "fallible", $e:ident, $repr:ty, $($v:ident),*) => {
+            unsafe impl ZoruaFallible<$repr> for $e {
+                fn is_valid(value: $repr) -> bool {
                     $(value == unsafe {std::mem::transmute($e::$v)})||*
                 }
             }
-            impl TryInto<$e> for Fallible<$e> {
-                type Error = $byterepr;
-                fn try_into(self) -> Result<$e, $byterepr> {
-                    self.value_or_byte_repr()
+            impl TryInto<$e> for Fallible<$e, $repr> {
+                type Error = $repr;
+                fn try_into(self) -> Result<$e, $repr> {
+                    if $e::is_valid(self.value) {
+                        Ok(unsafe { std::mem::transmute_copy(&self) })
+                    } else {
+                        Err(self.value)
+                    }
                 }
             }
         };
@@ -157,7 +158,7 @@ pub mod prelude {
             }
         } => {
             zorua_enum!(impl "common", $($struct_meta)*, $ev, $e, $byterepr, $($v $(=$vv)?),*);
-            zorua_enum!(impl "fallible", $e, $bitrepr, $byterepr, $($v),*);
+            zorua_enum!(impl "fallible", $e, $bitrepr, $($v),*);
             zorua_enum!(impl "bitfield", $e, $bitrepr);
         };
 
@@ -169,7 +170,7 @@ pub mod prelude {
             }
         } => {
             zorua_enum!(impl "common", $($struct_meta)*, $ev, $e, $byterepr, $($v $(=$vv)?),*);
-            zorua_enum!(impl "fallible", $e, $byterepr, $byterepr, $($v),*);
+            zorua_enum!(impl "fallible", $e, $byterepr, $($v),*);
         };
 
         // c-like bit non-exhaustive enum
@@ -180,7 +181,7 @@ pub mod prelude {
             }
         } => {
             zorua_enum!(impl "common", $($struct_meta)*, $ev, $e, $byterepr, $($v $(=$vv)?),*);
-            zorua_enum!(impl "fallible", $e, $bitrepr, $byterepr, $($v),*);
+            zorua_enum!(impl "fallible", $e, $bitrepr, $($v),*);
         };
     }
     pub use zorua_enum;
