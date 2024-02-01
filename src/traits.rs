@@ -25,7 +25,7 @@ macro_rules! impl_backing {
                     *self |= (Into::<$ty>::into(value.to_backed())) << index;
                 }
             }
-            impl ZoruaField for $ty {
+            unsafe impl ZoruaField for $ty {
                 type Alignment = $align;
                 fn swap_bytes_mut(&mut self) {
                     *self = (*self).swap_bytes();
@@ -75,8 +75,16 @@ macro_rules! impl_bit_backing {
 }
 
 //------------- Field trait + impls -------------
-/// A type that can be used within a ZoruaStruct.
-pub trait ZoruaField: Sized {
+/// # Safety
+/// This trait is safe to implement *iff*:
+/// - `Self` a *POD*, which is to say any possible bit pattern produces a valid instance of it.
+/// - The [ZoruaField::swap_bytes_mut] method is properly implemented. For primitive types it
+/// simply swaps the byte order, for composite types it swaps the byte order of all its fields.
+/// - The alignment of `Self` is correctly reflected in the associated [ZoruaField::Alignment] type.
+///
+/// The [derive macro](zorua_macro::zoruafield_derive_macro) for this trait ensures the first
+/// two requirements, so you should prefer using that.
+pub unsafe trait ZoruaField: Sized {
     type Alignment: Alignment;
 
     /// Swaps the byte order of self in-place.
@@ -133,12 +141,12 @@ pub trait BackingField: ZoruaField + Copy + std::fmt::Debug + PartialEq {
 
 impl_backing!((u8, A1), (u16, A2), (u32, A4), (u64, A8), (u128, A16));
 
-impl ZoruaField for () {
+unsafe impl ZoruaField for () {
     type Alignment = A1;
     fn swap_bytes_mut(&mut self) {}
 }
 
-impl<const N: usize, T: ZoruaField> ZoruaField for [T; N] {
+unsafe impl<const N: usize, T: ZoruaField> ZoruaField for [T; N] {
     type Alignment = T::Alignment;
 
     fn swap_bytes_mut(&mut self) {
