@@ -63,39 +63,4 @@ pub mod prelude {
         };
     }
     pub use bitfields;
-
-    // c-like byte exhaustive enum
-    #[macro_export]
-    macro_rules! zorua_enum {
-        {
-            $(#[$struct_meta:meta])*
-            $ev:vis enum $e:ident: =$byterepr:ty {
-                $($v:ident $(=$vv:literal)?),*$(,)?
-            }
-        } => {
-            $(#[$struct_meta])*
-            #[derive(Debug, Clone, Copy, PartialEq)]
-            #[repr($byterepr)]
-            $ev enum $e {
-                $($v $(=$vv)?),*
-            }
-            impl ZoruaBitField for $e {
-                type BitRepr = $byterepr;
-                fn to_bit_repr(self) -> Self::BitRepr {
-                    Self::BitRepr::from_backed(self as <Self::BitRepr as BackingBitField>::ByteRepr)
-                }
-                fn from_bit_repr(value: Self::BitRepr) -> Self {
-                    unsafe { std::mem::transmute(value.to_backed() as <Self::BitRepr as BackingBitField>::ByteRepr) }
-                }
-            }
-            impl ZoruaField for $e {
-                type Alignment = A1; //assumption, no way they fill up a u16+
-                fn swap_bytes_mut(&mut self) {
-                    //must be safe because enum is exhaustive over repr
-                    <$byterepr as ZoruaField>::swap_bytes_mut(unsafe {std::mem::transmute(self)});
-                }
-            }
-        };
-    }
-    pub use zorua_enum;
 }
