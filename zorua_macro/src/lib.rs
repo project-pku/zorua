@@ -39,8 +39,11 @@ fn impl_zoruafield_trait(ast: DeriveInput) -> TokenStream {
         }
     }
 
-    match &ast.data {
-        // Ensure the input is a struct
+    if has_repr(&ast.attrs, "align") {
+        panic!("#[derive(ZoruaField)] does not support structs with an `align` repr")
+    }
+
+    let trait_impl = match &ast.data {
         Data::Struct(data) => {
             for (i, field) in data.fields.iter().enumerate() {
                 let field_ty = &field.ty;
@@ -71,27 +74,40 @@ fn impl_zoruafield_trait(ast: DeriveInput) -> TokenStream {
                 if i > 1 && declared_align.is_none() {
                     panic!("Composite ZoruaFields must declare an `alignment` attribute.")
                 }
-                if has_repr(&ast.attrs, "align") {
-                    panic!("#[derive(ZoruaField)] does not support structs with an `align` repr")
-                }
+            }
+            let final_align = match declared_align {
+                None => first_type_align,
+                Some(ty) => quote! { #ty },
+            };
+            quote! {
+                    type Alignment = #final_align;
+                    fn swap_bytes_mut(&mut self) {
+                        #fields_impl
+                    }
             }
         }
-        _ => panic!("#[derive(ZoruaField)] is only defined for structs"),
-    }
+        Data::Enum(data) => {
+            if !has_repr(&ast.attrs, "u8") {
+                panic!("The enum must have the u8 repr, i.e. #[repr(u8)]")
+            }
+            if data.variants.len() != 256 {
+                panic!("To be a ZoruaField, this enum must have 256 variants.\nDid you mean to derive ZoruaBitField or ZoruaFallible?")
+            }
+            //No need to check if every value is covered, because repr u8 + 256 variants ensures this
+
+            quote! {
+                type Alignment = A1;
+                fn swap_bytes_mut(&mut self) {} //1 byte, no-op
+            }
+        }
+        _ => panic!("This macro is only defined for structs & enums"),
+    };
 
     let ident = &ast.ident;
     let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
-    let final_align = match declared_align {
-        None => first_type_align,
-        Some(ty) => quote! { #ty },
-    };
-
     quote! {
         impl #impl_generics ZoruaField for #ident #type_generics #where_clause {
-            type Alignment = #final_align;
-            fn swap_bytes_mut(&mut self) {
-                #fields_impl
-            }
+            #trait_impl
         }
     }
     .into()
