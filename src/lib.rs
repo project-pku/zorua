@@ -133,28 +133,6 @@ pub mod prelude {
             zorua_enum!(impl "fallible", $e, $bitrepr, $($v),*);
             zorua_enum!(impl "bitfield", $e, $bitrepr);
         };
-
-        // c-like byte non-exhaustive enum
-        {
-            $(#[$struct_meta:meta])*
-            $ev:vis enum $e:ident: $byterepr:ty {
-                $($v:ident $(= $vv:literal)?),*$(,)?
-            }
-        } => {
-            zorua_enum!(impl "common", $($struct_meta)*, $ev, $e, $byterepr, $($v $(=$vv)?),*);
-            zorua_enum!(impl "fallible", $e, $byterepr, $($v),*);
-        };
-
-        // c-like bit non-exhaustive enum
-        {
-            $(#[$struct_meta:meta])*
-            $ev:vis enum $e:ident: $bitrepr:ty:$byterepr:ty {
-                $($v:ident $(= $vv:literal)?),*$(,)?
-            }
-        } => {
-            zorua_enum!(impl "common", $($struct_meta)*, $ev, $e, $byterepr, $($v $(=$vv)?),*);
-            zorua_enum!(impl "fallible", $e, $bitrepr, $($v),*);
-        };
     }
     pub use zorua_enum;
 }
