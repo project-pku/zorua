@@ -4,6 +4,22 @@ use syn::{
     parse::Parser, parse_str, AttrStyle, Attribute, Data, DeriveInput, Expr, Index, Lit, Type,
 };
 
+/// This derive macro works on structs and c-like enums.
+///
+/// For composite structs, one must additionally provide
+/// an alignment annotation beneath the derive macro, e.g.:
+/// ```
+/// #[derive(ZoruaField)]
+/// #[alignment(A4)] //alignment annotation
+/// struct MyStruct {
+///     fieldA: u8,
+///     fieldB: u32, //align = 4
+/// }
+/// ```
+///
+/// # Safety
+/// If used, the alignment annotation must match (or be
+/// stricter than) the alignment of the type.
 #[proc_macro_derive(ZoruaField, attributes(alignment))]
 pub fn zoruafield_derive_macro(item: TokenStream) -> TokenStream {
     let ast = syn::parse(item).unwrap(); //parse
@@ -106,7 +122,7 @@ fn impl_zoruafield_trait(ast: DeriveInput) -> TokenStream {
     let ident = &ast.ident;
     let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
     quote! {
-        impl #impl_generics ZoruaField for #ident #type_generics #where_clause {
+        unsafe impl #impl_generics ZoruaField for #ident #type_generics #where_clause {
             #trait_impl
         }
     }
