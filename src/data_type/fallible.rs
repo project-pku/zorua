@@ -14,11 +14,22 @@ pub struct Fallible<T: ZoruaFallible<B>, B: Copy> {
     pub value: B,
 }
 
-///# Safety
+/// Implementing this trait on a c-like enum for some generic backing type `B`, will enable
+/// to usage of [Fallible]`<Self, B>`.
 ///
+/// # Safety
 /// Conditions to be safely implemented:
-/// - The generic type [B] must have the same size (but not necessarily [alignment](https://doc.rust-lang.org/std/mem/fn.transmute_copy.html)) as [Self].
-/// - The [is_valid] function must be properly implemented, i.e. every instance of [B] that transmuted to [Self] is invalid, should return false.
+/// - This should only be implemented on
+///   [c-like enums](https://doc.rust-lang.org/rust-by-example/custom_types/enum/c_like.html).
+/// - `B` should implement at least one of [BackingField] or [BackingBitField].
+/// - The generic type `B` must have the same size (but not necessarily
+///   [alignment](https://doc.rust-lang.org/std/mem/fn.transmute_copy.html)) as `Self`.
+/// - The [ZoruaFallible::is_valid()] function must be properly implemented. That is to say,
+///   it should return false for every instance of `B` that is invalid when transmuted to `Self`.
+///
+/// The [derive macro](zorua_macro::zoruafallible_derive_macro) for this trait ensures all of
+/// these requirements, and also implements [TryInto]`<Self>` for [Fallible]`<Self, B>`,
+/// so you should prefer using that.
 pub unsafe trait ZoruaFallible<B: Copy> {
     fn is_valid(value: B) -> bool;
 }

@@ -1,6 +1,6 @@
 use crate::data_type::*;
 
-pub use zorua_macro::ZoruaField;
+pub use zorua_macro::*;
 
 /// Automates boilerplate for implementing ZoruaField
 /// and BackingField on built-in int types
