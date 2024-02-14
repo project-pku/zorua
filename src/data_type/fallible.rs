@@ -6,7 +6,7 @@ use std::{
 };
 
 #[derive(Clone, Copy)]
-pub struct Fallible<T: ZoruaFallible<B>, B: Copy> {
+pub struct Fallible<T: ZoruaFallible<B>, B> {
     _marker: PhantomData<T>,
     pub value: B,
 }
@@ -27,11 +27,11 @@ pub struct Fallible<T: ZoruaFallible<B>, B: Copy> {
 /// The [derive macro](zorua_macro::zoruafallible_derive_macro) for this trait ensures all of
 /// these requirements, and also implements [TryInto]`<Self>` for [Fallible]`<Self, B>`,
 /// so you should prefer using that.
-pub unsafe trait ZoruaFallible<B: Copy> {
+pub unsafe trait ZoruaFallible<B> {
     fn is_valid(value: B) -> bool;
 }
 
-impl<T: ZoruaFallible<B>, B: Copy> Fallible<T, B> {
+impl<T: ZoruaFallible<B>, B> Fallible<T, B> {
     pub fn from_value(value: T) -> Fallible<T, B> {
         Fallible {
             _marker: Default::default(),
@@ -69,19 +69,19 @@ impl<T: ZoruaFallible<B>, B: BackingBitField> ZoruaBitField for Fallible<T, B> {
     }
 }
 
-impl<T: ZoruaFallible<B>, B: Copy> From<T> for Fallible<T, B> {
+impl<T: ZoruaFallible<B>, B> From<T> for Fallible<T, B> {
     fn from(value: T) -> Self {
         Self::from_value(value)
     }
 }
 
-impl<T: ZoruaFallible<B>, B: PartialEq + Copy> PartialEq for Fallible<T, B> {
+impl<T: ZoruaFallible<B>, B: PartialEq> PartialEq for Fallible<T, B> {
     fn eq(&self, other: &Self) -> bool {
         self.value == other.value
     }
 }
 
-impl<T: ZoruaFallible<B>, B: Debug + Copy> Debug for Fallible<T, B> {
+impl<T: ZoruaFallible<B>, B: Debug> Debug for Fallible<T, B> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.value.fmt(f)
     }
