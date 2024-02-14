@@ -1,86 +1,172 @@
 # zorua
-
 Zorua enables the creation of **zero-copy**, **endian-aware**, **bitfield-equipped** structs in Rust.
 
 ## Installation
-
 To use `zorua` add the following dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-zorua = { git = "https://github.com/project-pku/zorua.git", tag="v0.3" }
+zorua = { git = "https://github.com/project-pku/zorua.git", tag="v0.4" }
 ```
 
 > [!WARNING]  
 > This crate currently uses **nightly**!
 
-## Types
-### Zorua structs
-Zorua structs are the main feature of the crate. To create one simply import the `prelude` module and use the `zorua!` macro:
+## Example
+To use the crate simply import the `prelude` module and use make use of the derive and `bitfields` macros:
 
 ```rust
 use zorua::prelude::*;
 
-zorua! {
-    #[repr(C)] //important*
+bitfields! {
+    #[repr(C)]
+    #[derive(ZoruaField)]
+    #[alignment(A4)]
     pub struct MyStruct {
         pub field_a: u32,
         pub field_b: u8,
-        pub field_c: MyWrapperStruct, //can compose `zorua` structs
-        field_d: u16, //backing field (no `pub` so only bitfields are exposed)
-        |pub bitfield_a: u5@0, //5 bit uint @ index 0
-        |pub bitfield_b: bool@5, //1 bit bool @ index 5
-        |bitfield_c: u7@6, //bitfields can be private too
-        |pub padding: u4@13, //The rest of the bits
+        pub field_c: MyWrapperStruct, // All fields must also implement ZoruaField
+        field_d: u16, // Backing field (no `pub` so only bitfields are exposed)
+        |pub bitfield_a: u5@0, // 5 bit uint @ index 0
+        |pub bitfield_b: bool@5, // 1 bit bool @ index 5
+        |bitfield_c: u7@6, // Bitfields can be private too
+        |pub padding: u2@13, // The rest of the bits
     };
 }
 
-// You can also define wrapper structs w/ the macro
-// The type being  wrapped must impl `ZoruaField`
-zorua! {
-  #[repr(transparent)]
-  pub struct MyWrapperStruct(u8)
-}
+#[derive(ZoruaField)]
+pub struct MyWrapperStruct(u8)
 ```
-A zorua struct is composed of **fields** and **bitfields**. They are expanded upon below.
 
-**To ensure stability and field ordering, zorua structs should include the `#[repr(C)]` attr and wrapper structs should include the `#[repr(transparent)]`.*
+## Traits
+There are two main traits this crate provides: `ZoruaField` and `ZoruaBitField`.
 
-### Fields 
-All fields in a zorua struct must implement the `ZoruaField` trait. This trait is already implemented on the following types:
-- `u8`, `u16`, `u32`, `u64`, `u128`
-- `()`
-- `[T: ZoruaTrait; const N: usize]`
-- Structs/enums created with `zorua!` macro
-
-### Bitfields
-You'll notice that some fields in a zorua struct have a `|` prepended to them. Any block of fields beginning with this character are ***bitfields*** and they correspond to the first non-bitfield above them, we call this field their *backing field*.
-
-They are formatted like so:
+### ZoruaField
+`ZoruaField` represents a type that is valid for any bitpattern. It can be derived on structs and exhaustive [c-like enums](https://doc.rust-lang.org/rust-by-example/custom_types/enum/c_like.html) (i.e. having a variant for every bitpattern).
 
 ```rust
-pub my_backing_val: u8, <------------ Backing Field: my_backing_val
-|pub my_bitfield_a: u2@0,
-|pub my_bitfield_b: u5@2,
- ^   ^           ^ ^
- |   |           | |
- |   |           | +- Type: u5
- |   |           +--- Bit Index: 2
- |   +--------------- Name: my_bitfield_a
- +------------------- (Optional) Vis Modifier: pub
+use zorua::prelude::*;
+
+// Wrapper struct
+#[derive(ZoruaField)]
+struct MyWrapperStruct(u8)
+
+// Composite struct
+#[derive(ZoruaField)]
+#[alignment(A4)] //composite structs must include alignment annotation
+struct MyStruct {
+  field_a: u32,
+  field_b: u8,
+  field_c: MyWrapperStruct
+}
+
+// u8 Exhaustive enum
+#[derive(ZoruaField)]
+#[repr(u8)]
+enum MyExhaustiveEnum {
+  Variant1,
+  Variant2,
+  //...,
+  Variant256, //2^8 = 256
+}
 ```
 
-The following types already implement `ZoruaBitField`:
-- The `u1` to `u128` types
-- `bool` (takes up 1 bit)
-- Enums created with the `zorua!` macro
+The `ZoruaField` trait enables the use of:
+- `to_le_mut` and `to_be_mut` which swaps the byte order, in-place, of the type to the target architecture's endianness.
+- `as_bytes` and `as_bytes_mut` which safely transmutes the type to an aligned byte array, up to mutability.
+- `from_bytes` and `from_bytes_mut` which safely transmutes an aligned byte array to an instance of the type, up to mutability.
 
-Adding a bitfield to a zorua struct doesn't change anything about the data it stores or its layout. Instead, it adds a getter & setter method onto the struct for that particular bitfield. These functions get/set as many bits from the backing field as needed for bitfield's type, starting at the given index.
+### ZoruaBitField
+`ZoruaBitField` represents a type that can be represented as an *n*bit value. It can be derived on exhaustive c-like enums, or implemented manually for structs.
+
+```rust
+// Struct
+// - Can be represented by a u4
+struct MyStruct {
+  fourbitval: u8
+}
+impl trait ZoruaBitField for MyStruct {
+    type BitRepr = u4;
+
+    fn to_bit_repr(self) -> Self::BitRepr {
+      //truncate u8 -> u4
+      (self.fourbitval % 16).try_into().unwrap()
+    }
+
+    fn from_bit_repr(value: Self::BitRepr) -> Self {
+      value.into() //cast u4 -> u8
+    }
+}
+
+// Exhaustive enum
+// - Total number of variants is a power of 2
+#[derive(ZoruaField)]
+#[repr(u8)]
+enum MyExhaustive2BitEnum {
+  Variant1,
+  Variant2,
+  Variant3,
+  Variant4 //2^2 = 4
+}
+```
+
+## Bitfields
+You may be asking yourself, "`ZoruaField`s made sense, they are required for the safe transmutation of data types to byte arrays, and structured byte order swapping. But what is the point of `ZoruaBitField`s?" The answer is found in the `bitfield` macro. Consider the struct defined in the [example](#example) section:
+
+```rust
+bitfields! {
+    #[repr(C)]
+    #[derive(ZoruaField)]
+    #[alignment(A4)]
+    pub struct MyStruct {
+        pub field_a: u32,
+        pub field_b: u8,
+        pub field_c: MyWrapperStruct, // All fields must also implement ZoruaField
+        field_d: u16, // Backing field (no `pub` so only bitfields are exposed)
+        |pub bitfield_a: u5@0, // 5 bit uint @ index 0
+        |pub bitfield_b: bool@5, // 1 bit bool @ index 5
+        |bitfield_c: u7@6, // Bitfields can be private too
+        |pub padding: u2@13, // The rest of the bits
+    };
+}
+```
+
+You'll notice that some "fields" in the struct have a `|` prepended to them. Any block of fields beginning with this character are ***bitfields*** and they correspond to the first non-bitfield above them, we call this field their ***backing field***.
+
+In the example above:
+
+```rust
+field_d: u16, <------------ Backing Field: my_backing_val
+|pub bitfield_a: bool@0,
+|pub bitfield_b: u5@1,
+ ^   ^           ^  ^
+ |   |           |  |
+ |   |           |  +- Type: u5
+ |   |           +---- Bit Index: 1
+ |   +---------------- Name: bitfield_b
+ +-------------------- (Optional) Vis Modifier: pub
+```
+
+The bitfields must be of a type that implements `ZoruaBitField`. On top user defined types, `ZoruaBitField` is implemented on bool (as a 1 bit value), and the provided `u1`-`u127` types.
+
+### Implementation
+Adding a bitfield to a struct doesn't change anything about the data it stores or its layout. Instead, it adds a getter & setter method onto the struct for that particular bitfield. These functions get/set as many bits from the backing field as needed for bitfield's type, starting at the given index.
+
+Using the example above, we could call the following:
+
+```rust
+let mystruct: MyStruct = //...init struct
+
+mystruct.field_d = 0b100000; //bit index 5 = 1 (i.e. true)
+
+println!("{}", mystruct.bitfield_a()); //prints "true"
+mystruct.set_bitfield_b(false); //sets value of bitfield_a
+println!("{}", mystruct.bitfield_a()); //prints "false"
+```
 
 Some things to note about bitfields:
-
 - Backing fields must be one of: `u8`, `u16`, `u32`, `u64`, `u128`.
-- The `zorua!` macro does not currently enforce that a bitfield block accounts for all bits in the parent, nor that fields do not overlap:
+- The `bitfields` macro does not currently enforce that a bitfield block accounts for all bits in the parent, nor that fields do not overlap:
 
 ```rust
 pub parent: u8,
@@ -88,101 +174,28 @@ pub parent: u8,
 |pub child_2: u5@1 //Takes up bits 1-5
 ```
 
-### Enums
-The `zorua!` macro can be used to automatically implement the `ZoruaField` & `ZoruaBitField` traits on [c-like enums](https://doc.rust-lang.org/rust-by-example/custom_types/enum/c_like.html). We simply wrap an enum with the `zorua!` macro, and preface it with its bit repr (i.e. how many bits it takes up in the backing field) and its byte repr (i.e. the smallest built-in uint that can hold the bit repr):
+## Fallible
+While the `ZoruaField` and `ZoruaBitField` traits deal with cover the case of exhaustive enums, what about non-exhaustive ones. After all, most enums don't happen to have a number of variants equal to a power of 2.
+
+Enter the `ZoruaFallible` trait. Deriving this trait on a c-like enum, with an arbitrary number of variants, allows the use of the `Fallible` type in in fields and bitfields. For example:
 
 ```rust
-zorua! {
-  u2, u8, //the bit repr, then the bit repr
-  pub enum Enum1 {
-      Variant1,
-      Variant2,
-      Variant3,
-      //Not enough variants to fill 2 bits
-  };
+#[derive(ZoruaFallible)]
+#[targets(u3, u8)] //can be represented by both u8 and u3
+enum MyEnum {
+    Variant1,
+    Variant2,
+    Variant3,
+    Variant4,
+    Variant5
 }
 
-zorua! {
-  =u1, u8, //`=` before bit repr means exhaustive
-  pub enum Enum2 {
-      Variant1,
-      Variant2,
-      //Exactly enough variants to fill 1 bit
-  };
-}
-
-zorua! {
-  =u8, //if bit repr & byte repr both exhaustive, only need 1
-  pub enum Enum3 {
-      Variant1,
-      ...
-      Variant256
-      //Exactly enough variants to fill 8 bits
-  };
+struct MyTestStruct {
+  field_a: u16,
+  field_b: Fallible<MyEnum, u8>, //1 byte
+  field_c: u8,
+  |subfield_a: u2@0,
+  |subfield_b: Fallible<MyEnum, u3>@2, //3 bits
+  |subfield_c: bool@5,
 }
 ```
-
-As you can see, there are 3 types of enums that the macro supports:
-- **Exhaustive byte enums**: These are enums whose byte and bit repr are equal and that have a variant for each possible value of their the repr. (Considering how many values that is, you'd probably only use it for `u8`). These implement both `ZoruaField` and `ZoruaBitField`.
-- **Exhaustive bit enums**: These are enums that have a variant for each possible value of their bit repr but not their byte repr. These implement `ZoruaBitField`, and the `Fallible` versions implement `ZoruaField`.
-- **Non-Exhaustive enums**: These are enums that do not have enough variants for either their bit or byte repr. The `Fallible` versions implement both `ZoruaField` and `ZoruaBitField`.
-
-The `Fallible` version of an enum is simply a wrapper that allows it to be used as a field or bitfield despite it not having enough variants to fill it:
-```rust
-zorua! {
-  #[repr(C)]
-  pub struct Foo {
-    pub field_1: Fallible<Enum1>, //need to wrap w/ Fallible
-    pub field_2: Fallible<Enum2>, //^^
-    pub field_3: Enum3, //no need for fallible
-    pub backing: u16,
-    |pub bitfield_1: Fallible<Enum1>@0 //Takes up 2 bits
-    |pub bitfield_2: Enum2@2 //Takes up 1 bit
-    |pub bitfield_3: Enum3@3 //8 bits
-  }
-}
-```
-
-## Usage
-### Setting and getting fields
-Consider the following zorua struct:
-```rust
-zorua! {
-  #[repr(C)]
-  pub struct MyStruct {
-    pub field_1: u16,
-    pub field_2: Fallible<Enum1>, //1 byte
-    pub field_3: Enum3, //1 byte
-    backing: u32,
-    |pub bitfield_1: u3@0
-    |pub bitfield_2: Fallible<Enum1>@3 //2 bits
-    |pub bitfield_3: Enum3@5 //8 bits
-    |pub bitfield_4: u8@12
-    |pub bitfield_5: bool@20
-  }
-}
-```
-
-We can access its fields as you might expect:
-```rust
-//Just a regular field
-myStruct.field_1 = 23;
-
-//Since field_2 is a fallible, need to cast variant
-myStruct.field_2 = Enum1::Variant1.into();
-
-//Since field_2 might not correspond to a valid variant
-//Need to use try_into. Error type is just the value.
-let x: Enum1 = myStruct.field_2.try_into().unwrap();
-
-//no need to do any casting
-myStruct.field_3 = Enum3::Variant2;
-
-let x: u3 = myStruct.bitfield_1();
-myStruct.set_bitfield_1(4u8.into()); //u8 -> u3
-myStruct.set_bitfield_2(Enum1::Variant1.into());
-myStruct.set_bitfield_5(false);
-```
-
-### Converting to/from bytes
-Currently you can simply call `std::mem::transmute` to zero-copy convert your zorua struct to/from a byte array. To deal with potential alignment issues, will implement a alignment safe conversion in the next release.
