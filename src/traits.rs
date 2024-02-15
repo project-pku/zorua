@@ -75,6 +75,13 @@ macro_rules! impl_bit_backing {
 }
 
 //------------- Field trait + impls -------------
+/// const assertion that ensures that target has a known
+/// endianness, so that the [ZoruaField] trait is well-formed.
+const _: () = assert!(
+    cfg!(target_endian = "big") || cfg!(target_endian = "little"),
+    "This crate can only be compiled on little or big endian systems"
+);
+
 /// # Safety
 /// This trait is safe to implement *iff*:
 /// - `Self` a *POD*, which is to say any possible bit pattern produces a valid instance of it.
@@ -93,7 +100,6 @@ pub unsafe trait ZoruaField: Sized {
     /// Swaps the byte order of self in-place iff the target is big endian
     /// (is a no-op on little endian targets).
     fn to_le_mut(&mut self) {
-        //Assumption: All targets are either little or big endian.
         #[cfg(target_endian = "big")]
         {
             self.swap_bytes_mut();
@@ -103,7 +109,6 @@ pub unsafe trait ZoruaField: Sized {
     /// Swaps the byte order of self in-place iff the target is little endian
     /// (is a no-op on big endian targets).
     fn to_be_mut(&mut self) {
-        //Assumption: All targets are either little or big endian.
         #[cfg(target_endian = "little")]
         {
             self.swap_bytes_mut();
