@@ -115,17 +115,19 @@ pub unsafe trait ZoruaField: Sized {
         }
     }
 
-    fn as_bytes(&self) -> &Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]> {
+    fn as_bytes(&self) -> &AlignedBytes<Self::Alignment, { std::mem::size_of::<Self>() }> {
         unsafe { std::mem::transmute(self) }
     }
-    fn as_bytes_mut(&mut self) -> &mut Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]> {
+    fn as_bytes_mut(
+        &mut self,
+    ) -> &mut AlignedBytes<Self::Alignment, { std::mem::size_of::<Self>() }> {
         unsafe { std::mem::transmute(self) }
     }
-    fn from_bytes(bytes: &Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]>) -> &Self {
+    fn from_bytes(bytes: &AlignedBytes<Self::Alignment, { std::mem::size_of::<Self>() }>) -> &Self {
         unsafe { std::mem::transmute(bytes) }
     }
     fn from_bytes_mut(
-        bytes: &mut Aligned<Self::Alignment, [u8; std::mem::size_of::<Self>()]>,
+        bytes: &mut AlignedBytes<Self::Alignment, { std::mem::size_of::<Self>() }>,
     ) -> &mut Self {
         unsafe { std::mem::transmute(bytes) }
     }
