@@ -82,6 +82,12 @@ const _: () = assert!(
     "This crate can only be compiled on little or big endian systems"
 );
 
+pub enum Endian {
+    Native,
+    Little,
+    Big,
+}
+
 /// # Safety
 /// This trait is safe to implement *iff*:
 /// - `Self` a *POD*, which is to say any possible bit pattern produces a valid instance of it.
@@ -115,21 +121,48 @@ pub unsafe trait ZoruaField: Sized {
         }
     }
 
-    fn as_bytes(&self) -> &AlignedBytes<Self::Alignment, { std::mem::size_of::<Self>() }> {
+    /// Casts an `&Self` as a `&[u8]` without any further transformation.
+    ///
+    /// This is as opposed to [ZoruaField::as_bytes], which swaps the byte
+    /// order of `Self` before casting, making it suitable for serialization.
+    fn as_bytes_raw(&self) -> &AlignedBytes<Self::Alignment, { std::mem::size_of::<Self>() }> {
         unsafe { std::mem::transmute(self) }
     }
-    fn as_bytes_mut(
+
+    /// Casts an &[AlignedBytes] (of the correct [Alignment] and length)
+    /// to a &`Self` without any further transformation.
+    ///
+    /// This is as opposed to [ZoruaField::from_bytes], which swaps the byte order of
+    ///  &`Self` after casting, making it suitable for deserialization.
+    fn from_bytes_raw(
+        bytes: &AlignedBytes<Self::Alignment, { std::mem::size_of::<Self>() }>,
+    ) -> &Self {
+        unsafe { std::mem::transmute(bytes) }
+    }
+
+    fn as_bytes(
         &mut self,
+        endian: Endian,
     ) -> &mut AlignedBytes<Self::Alignment, { std::mem::size_of::<Self>() }> {
+        match endian {
+            Endian::Little => self.to_le_mut(),
+            Endian::Big => self.to_be_mut(),
+            Endian::Native => (),
+        }
         unsafe { std::mem::transmute(self) }
     }
-    fn from_bytes(bytes: &AlignedBytes<Self::Alignment, { std::mem::size_of::<Self>() }>) -> &Self {
-        unsafe { std::mem::transmute(bytes) }
-    }
-    fn from_bytes_mut(
+
+    fn from_bytes(
         bytes: &mut AlignedBytes<Self::Alignment, { std::mem::size_of::<Self>() }>,
+        endian: Endian,
     ) -> &mut Self {
-        unsafe { std::mem::transmute(bytes) }
+        let value: &mut Self = unsafe { std::mem::transmute(bytes) };
+        match endian {
+            Endian::Little => value.to_le_mut(),
+            Endian::Big => value.to_be_mut(),
+            Endian::Native => (),
+        }
+        value
     }
 }
 
