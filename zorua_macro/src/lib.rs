@@ -61,6 +61,14 @@ fn impl_zoruafield_trait(ast: DeriveInput) -> TokenStream {
 
     let trait_impl = match &ast.data {
         Data::Struct(data) => {
+            //Ensure composite structs are repr C (otherwise size, alignment, and order are undefined)
+            if (data.fields.len() > 1) && !has_repr(&ast.attrs, "C") {
+                panic!(
+                    "Composite structs must have the C repr to derive ZoruaField\n\
+                    Try adding `#[repr(C)]` to the struct"
+                )
+            }
+
             for (i, field) in data.fields.iter().enumerate() {
                 let field_ty = &field.ty;
                 if i == 0 {
@@ -103,13 +111,19 @@ fn impl_zoruafield_trait(ast: DeriveInput) -> TokenStream {
             }
         }
         Data::Enum(data) => {
+            //These two conditions ensure enum is a POD
             if !has_repr(&ast.attrs, "u8") {
-                panic!("The enum must have the u8 repr, i.e. #[repr(u8)]")
+                panic!(
+                    "Enums must have the u8 repr to derive ZoruaField\n\
+                    Try adding `#[repr(u8)]` to the struct"
+                )
             }
             if data.variants.len() != 256 {
-                panic!("To be a ZoruaField, this enum must have 256 variants.\nDid you mean to derive ZoruaBitField or ZoruaFallible?")
+                panic!(
+                    "Enums must have 256 variants to derive ZoruaField.\n\
+                    Did you mean to derive ZoruaBitField or ZoruaFallible?"
+                )
             }
-            //No need to check if every value is covered, because repr u8 + 256 variants ensures this
 
             quote! {
                 type Alignment = A1;
