@@ -83,12 +83,6 @@ const _: () = assert!(
     "This crate can only be compiled on little or big endian systems"
 );
 
-pub enum Endian {
-    Native,
-    Little,
-    Big,
-}
-
 #[derive(Debug)]
 pub enum CastError {
     /// Denotes that the size of the target type and the byte slice.
@@ -125,32 +119,18 @@ pub unsafe trait ZoruaField: Sized {
         }
     }
 
-    /// Casts a `&Self` as a `&[u8]` without any further transformation.
-    ///
-    /// This is as opposed to [ZoruaField::as_bytes_mut], which *may* swap the
-    /// byte order of &`Self` before casting, making it suitable for deserialization.
     fn as_bytes_ref(&self) -> &[u8] {
         let len = std::mem::size_of_val(self);
         let slf: *const Self = self;
         unsafe { std::slice::from_raw_parts(slf.cast::<u8>(), len) }
     }
 
-    fn as_bytes_mut(&mut self, endian: Endian) -> &mut [u8] {
-        match endian {
-            Endian::Little => self.to_le_mut(),
-            Endian::Big => self.to_be_mut(),
-            Endian::Native => (),
-        }
+    fn as_bytes_mut(&mut self) -> &mut [u8] {
         let len = mem::size_of_val(self);
         let slf: *mut Self = self;
         unsafe { std::slice::from_raw_parts_mut(slf.cast::<u8>(), len) }
     }
 
-    /// Attempts to cast a byte slice to a &`Self` without any further transformation.
-    /// Provides a [CastError] if the cast failed.
-    ///
-    /// This is as opposed to [ZoruaField::try_from_bytes_mut], which *may* swap the
-    /// byte order of &`Self` after casting, making it suitable for deserialization.
     fn try_from_bytes_ref(bytes: &[u8]) -> Result<&Self, CastError> {
         if bytes.len() != mem::size_of::<Self>() {
             Err(CastError::SizeMismatch)
@@ -161,19 +141,13 @@ pub unsafe trait ZoruaField: Sized {
         }
     }
 
-    fn try_from_bytes_mut(bytes: &mut [u8], endian: Endian) -> Result<&mut Self, CastError> {
+    fn try_from_bytes_mut(bytes: &mut [u8]) -> Result<&mut Self, CastError> {
         if bytes.len() != mem::size_of::<Self>() {
             Err(CastError::SizeMismatch)
         } else if (bytes.as_ptr() as *const ()).align_offset(mem::align_of::<Self>()) != 0 {
             Err(CastError::AlignmentTooStrict)
         } else {
-            let value = unsafe { &mut *(bytes.as_mut_ptr() as *mut Self) };
-            match endian {
-                Endian::Little => value.to_le_mut(),
-                Endian::Big => value.to_be_mut(),
-                Endian::Native => (),
-            }
-            Ok(value)
+            Ok(unsafe { &mut *(bytes.as_mut_ptr() as *mut Self) })
         }
     }
 }
