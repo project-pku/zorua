@@ -51,8 +51,6 @@ impl<T: ZoruaFallible<B>, B> Fallible<T, B> {
 }
 
 unsafe impl<T: ZoruaFallible<B>, B: BackingField> ZoruaField for Fallible<T, B> {
-    type Alignment = B::Alignment;
-
     fn swap_bytes_mut(&mut self) {
         B::swap_bytes_mut(&mut self.value)
     }
