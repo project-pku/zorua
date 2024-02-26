@@ -1,3 +1,5 @@
+use std::mem;
+
 use crate::data_type::*;
 
 pub use zorua_macro::*;
@@ -5,7 +7,7 @@ pub use zorua_macro::*;
 /// Automates boilerplate for implementing ZoruaField
 /// and BackingField on built-in int types
 macro_rules! impl_backing {
-    ($(($ty:ty, $align:ty)),*) => {
+    ($($ty:ty),*) => {
         $(
             impl BackingField for $ty {
                 fn get_bits_at<T: BackingBitField>(self, index: usize) -> T
@@ -26,7 +28,6 @@ macro_rules! impl_backing {
                 }
             }
             unsafe impl ZoruaField for $ty {
-                type Alignment = $align;
                 fn swap_bytes_mut(&mut self) {
                     *self = (*self).swap_bytes();
                 }
@@ -88,18 +89,21 @@ pub enum Endian {
     Big,
 }
 
+#[derive(Debug)]
+pub enum CastError {
+    /// Denotes that the size of the target type and the byte slice.
+    SizeMismatch,
+
+    /// Denotes that the alignment of the target type was stricter than the byte slice.
+    AlignmentTooStrict,
+}
+
 /// # Safety
 /// This trait is safe to implement *iff*:
 /// - `Self` a *POD*, which is to say any possible bit pattern produces a valid instance of it.
 /// - The [ZoruaField::swap_bytes_mut] method is properly implemented. For primitive types it
 /// simply swaps the byte order, for composite types it swaps the byte order of all its fields.
-/// - The alignment of `Self` is correctly reflected in the associated [ZoruaField::Alignment] type.
-///
-/// The [derive macro](zorua_macro::zoruafield_derive_macro) for this trait ensures the first
-/// two requirements, so you should prefer using that.
 pub unsafe trait ZoruaField: Sized {
-    type Alignment: Alignment;
-
     /// Swaps the byte order of self in-place.
     fn swap_bytes_mut(&mut self);
 
@@ -121,48 +125,56 @@ pub unsafe trait ZoruaField: Sized {
         }
     }
 
-    /// Casts an `&Self` as a `&[u8]` without any further transformation.
+    /// Casts a `&Self` as a `&[u8]` without any further transformation.
     ///
-    /// This is as opposed to [ZoruaField::as_bytes], which swaps the byte
-    /// order of `Self` before casting, making it suitable for serialization.
-    fn as_bytes_raw(&self) -> &AlignedBytes<Self::Alignment, { std::mem::size_of::<Self>() }> {
-        unsafe { std::mem::transmute(self) }
+    /// This is as opposed to [ZoruaField::as_bytes_mut], which *may* swap the
+    /// byte order of &`Self` before casting, making it suitable for deserialization.
+    fn as_bytes_ref(&self) -> &[u8] {
+        let len = std::mem::size_of_val(self);
+        let slf: *const Self = self;
+        unsafe { std::slice::from_raw_parts(slf.cast::<u8>(), len) }
     }
 
-    /// Casts an &[AlignedBytes] (of the correct [Alignment] and length)
-    /// to a &`Self` without any further transformation.
-    ///
-    /// This is as opposed to [ZoruaField::from_bytes], which swaps the byte order of
-    ///  &`Self` after casting, making it suitable for deserialization.
-    fn from_bytes_raw(
-        bytes: &AlignedBytes<Self::Alignment, { std::mem::size_of::<Self>() }>,
-    ) -> &Self {
-        unsafe { std::mem::transmute(bytes) }
-    }
-
-    fn as_bytes(
-        &mut self,
-        endian: Endian,
-    ) -> &mut AlignedBytes<Self::Alignment, { std::mem::size_of::<Self>() }> {
+    fn as_bytes_mut(&mut self, endian: Endian) -> &mut [u8] {
         match endian {
             Endian::Little => self.to_le_mut(),
             Endian::Big => self.to_be_mut(),
             Endian::Native => (),
         }
-        unsafe { std::mem::transmute(self) }
+        let len = mem::size_of_val(self);
+        let slf: *mut Self = self;
+        unsafe { std::slice::from_raw_parts_mut(slf.cast::<u8>(), len) }
     }
 
-    fn from_bytes(
-        bytes: &mut AlignedBytes<Self::Alignment, { std::mem::size_of::<Self>() }>,
-        endian: Endian,
-    ) -> &mut Self {
-        let value: &mut Self = unsafe { std::mem::transmute(bytes) };
-        match endian {
-            Endian::Little => value.to_le_mut(),
-            Endian::Big => value.to_be_mut(),
-            Endian::Native => (),
+    /// Attempts to cast a byte slice to a &`Self` without any further transformation.
+    /// Provides a [CastError] if the cast failed.
+    ///
+    /// This is as opposed to [ZoruaField::try_from_bytes_mut], which *may* swap the
+    /// byte order of &`Self` after casting, making it suitable for deserialization.
+    fn try_from_bytes_ref(bytes: &[u8]) -> Result<&Self, CastError> {
+        if bytes.len() != mem::size_of::<Self>() {
+            Err(CastError::SizeMismatch)
+        } else if (bytes.as_ptr() as *const ()).align_offset(mem::align_of::<Self>()) != 0 {
+            Err(CastError::AlignmentTooStrict)
+        } else {
+            Ok(unsafe { &*(bytes.as_ptr() as *const Self) })
         }
-        value
+    }
+
+    fn try_from_bytes_mut(bytes: &mut [u8], endian: Endian) -> Result<&mut Self, CastError> {
+        if bytes.len() != mem::size_of::<Self>() {
+            Err(CastError::SizeMismatch)
+        } else if (bytes.as_ptr() as *const ()).align_offset(mem::align_of::<Self>()) != 0 {
+            Err(CastError::AlignmentTooStrict)
+        } else {
+            let value = unsafe { &mut *(bytes.as_mut_ptr() as *mut Self) };
+            match endian {
+                Endian::Little => value.to_le_mut(),
+                Endian::Big => value.to_be_mut(),
+                Endian::Native => (),
+            }
+            Ok(value)
+        }
     }
 }
 
@@ -179,16 +191,13 @@ pub trait BackingField: ZoruaField + Copy + std::fmt::Debug + PartialEq {
         Self: From<T::ByteRepr> + TryInto<T::ByteRepr>;
 }
 
-impl_backing!((u8, A1), (u16, A2), (u32, A4), (u64, A8), (u128, A16));
+impl_backing!(u8, u16, u32, u64, u128);
 
 unsafe impl ZoruaField for () {
-    type Alignment = A1;
     fn swap_bytes_mut(&mut self) {}
 }
 
 unsafe impl<const N: usize, T: ZoruaField> ZoruaField for [T; N] {
-    type Alignment = T::Alignment;
-
     fn swap_bytes_mut(&mut self) {
         self.iter_mut().for_each(|value| {
             value.swap_bytes_mut();

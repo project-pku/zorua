@@ -6,21 +6,18 @@ use syn::{
 
 /// This derive macro works on structs and c-like enums.
 ///
-/// For composite structs, one must additionally provide
-/// an alignment annotation beneath the derive macro, e.g.:
+/// Composite structs must additionally have the
+/// [C repr](https://doc.rust-lang.org/nomicon/other-reprs.html#reprc),
+/// in order to ensure their layout.
 /// ```
 /// #[derive(ZoruaField)]
-/// #[alignment(A4)] //alignment annotation
+/// #[repr(C)] //mandatory for composite structs
 /// struct MyStruct {
-///     fieldA: u8,
-///     fieldB: u32, //align = 4
+///     fieldA: u16,
+///     fieldB: OtherZoruaField,
 /// }
 /// ```
-///
-/// # Safety
-/// If used, the alignment annotation must match (or be
-/// stricter than) the alignment of the type.
-#[proc_macro_derive(ZoruaField, attributes(alignment))]
+#[proc_macro_derive(ZoruaField)]
 pub fn zoruafield_derive_macro(item: TokenStream) -> TokenStream {
     let ast = syn::parse(item).unwrap(); //parse
     impl_zoruafield_trait(ast) //generate
@@ -42,24 +39,7 @@ pub fn zoruafallible_derive_macro(item: TokenStream) -> TokenStream {
 
 fn impl_zoruafield_trait(ast: DeriveInput) -> TokenStream {
     let mut fields_impl = quote! {};
-    let mut first_type_align = quote! { A1 };
-    let mut declared_align: Option<Type> = None;
-    for attr in &ast.attrs {
-        if attr.path().is_ident("alignment") {
-            match declared_align {
-                None => declared_align = Some(attr.parse_args().expect(
-                    "The `alignment` attribute must contain an alignment type, e.g. #[alignment(A4)]",
-                )),
-                Some(_) => panic!("There can only be 1 `alignment` attribute.")
-            }
-        }
-    }
-
-    if has_repr(&ast.attrs, "align") {
-        panic!("#[derive(ZoruaField)] does not support structs with an `align` repr")
-    }
-
-    let trait_impl = match &ast.data {
+    match &ast.data {
         Data::Struct(data) => {
             //Ensure composite structs are repr C (otherwise size, alignment, and order are undefined)
             if (data.fields.len() > 1) && !has_repr(&ast.attrs, "C") {
@@ -70,13 +50,6 @@ fn impl_zoruafield_trait(ast: DeriveInput) -> TokenStream {
             }
 
             for (i, field) in data.fields.iter().enumerate() {
-                let field_ty = &field.ty;
-                if i == 0 {
-                    first_type_align = quote! {
-                        <#field_ty as ZoruaField>::Alignment
-                    };
-                }
-
                 //Build up swap_bytes_mut fn
                 fields_impl.extend(match &field.ident {
                     // Struct fields
@@ -94,20 +67,6 @@ fn impl_zoruafield_trait(ast: DeriveInput) -> TokenStream {
                         tokens
                     }
                 });
-
-                if i > 1 && declared_align.is_none() {
-                    panic!("Composite ZoruaFields must declare an `alignment` attribute.")
-                }
-            }
-            let final_align = match declared_align {
-                None => first_type_align,
-                Some(ty) => quote! { #ty },
-            };
-            quote! {
-                    type Alignment = #final_align;
-                    fn swap_bytes_mut(&mut self) {
-                        #fields_impl
-                    }
             }
         }
         Data::Enum(data) => {
@@ -124,11 +83,6 @@ fn impl_zoruafield_trait(ast: DeriveInput) -> TokenStream {
                     Did you mean to derive ZoruaBitField or ZoruaFallible?"
                 )
             }
-
-            quote! {
-                type Alignment = A1;
-                fn swap_bytes_mut(&mut self) {} //1 byte, no-op
-            }
         }
         _ => panic!("This macro is only defined for structs & enums"),
     };
@@ -137,7 +91,9 @@ fn impl_zoruafield_trait(ast: DeriveInput) -> TokenStream {
     let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
     quote! {
         unsafe impl #impl_generics ZoruaField for #ident #type_generics #where_clause {
-            #trait_impl
+            fn swap_bytes_mut(&mut self) {
+                #fields_impl
+            }
         }
     }
     .into()
