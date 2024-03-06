@@ -100,15 +100,38 @@ fn impl_zoruafield_trait(ast: DeriveInput) -> TokenStream {
 }
 
 fn impl_zoruabitfield_trait(ast: DeriveInput) -> TokenStream {
-    if !has_repr(&ast.attrs, "u8") {
-        panic!("The enum must have the u8 repr, i.e. #[repr(u8)]")
-    }
-
-    let bit_repr: Type;
+    let ident = &ast.ident;
+    let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
     match &ast.data {
+        Data::Struct(data) => {
+            if data.fields.len() != 1 {
+                panic!("Only structs with one field can derive ZoruaBitField")
+            }
+            let field0 = data.fields.iter().collect::<Vec<&syn::Field>>()[0];
+            if field0.ident.is_some() {
+                panic!("Only tuple structs can derive ZoruaBitField")
+            }
+            let wrapped_ty = &field0.ty;
+            quote! {
+                impl #impl_generics ZoruaBitField for #ident #type_generics #where_clause {
+                    type BitRepr = <#wrapped_ty as ZoruaBitField>::BitRepr;
+                    fn to_bit_repr(self) -> Self::BitRepr {
+                        self.0.to_bit_repr()
+                    }
+                    fn from_bit_repr(value: Self::BitRepr) -> Self {
+                        Self(<#wrapped_ty as ZoruaBitField>::from_bit_repr(value))
+                    }
+                }
+            }
+            .into()
+        }
         Data::Enum(data) => {
+            if !has_repr(&ast.attrs, "u8") {
+                panic!("The enum must have the u8 repr, i.e. #[repr(u8)]")
+            }
+
             let num_variants = data.variants.len();
-            bit_repr = match num_variants {
+            let bit_repr: Type = match num_variants {
                 2 => parse_str("u1").unwrap(),
                 4 => parse_str("u2").unwrap(),
                 8 => parse_str("u3").unwrap(),
@@ -158,24 +181,22 @@ fn impl_zoruabitfield_trait(ast: DeriveInput) -> TokenStream {
             if !exists_vec.iter().all(|value| *value) {
                 panic!("The disciriminants should cover every value from 0 to 2^n")
             }
-        }
-        _ => panic!("This macro only supports enums"),
-    }
 
-    let ident = &ast.ident;
-    let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
-    quote! {
-        impl #impl_generics ZoruaBitField for #ident #type_generics #where_clause {
-            type BitRepr = #bit_repr;
-            fn to_bit_repr(self) -> #bit_repr {
-                #bit_repr::from_backed(self as <#bit_repr as BackingBitField>::ByteRepr)
+            quote! {
+                impl #impl_generics ZoruaBitField for #ident #type_generics #where_clause {
+                    type BitRepr = #bit_repr;
+                    fn to_bit_repr(self) -> #bit_repr {
+                        #bit_repr::from_backed(self as <#bit_repr as BackingBitField>::ByteRepr)
+                    }
+                    fn from_bit_repr(value: #bit_repr) -> Self {
+                        unsafe { std::mem::transmute(value.to_backed() as <#bit_repr as BackingBitField>::ByteRepr) }
+                    }
+                }
             }
-            fn from_bit_repr(value: #bit_repr) -> Self {
-                unsafe { std::mem::transmute(value.to_backed() as <#bit_repr as BackingBitField>::ByteRepr) }
-            }
+            .into()
         }
+        _ => panic!("This macro only supports enums and newtype structs"),
     }
-    .into()
 }
 
 fn impl_zoruafallible_trait(ast: DeriveInput) -> TokenStream {
