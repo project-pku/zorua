@@ -58,16 +58,16 @@ fn impl_zoruafield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStream {
         });
     }
 
-    let ident = &ast.ident;
-    let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
-    quote! {
-        unsafe impl #impl_generics ZoruaField for #ident #type_generics #where_clause {
+    generate_impl(
+        "ZoruaField",
+        true,
+        ast,
+        quote! {
             fn swap_bytes_mut(&mut self) {
                 #fields_impl
             }
-        }
-    }
-    .into()
+        },
+    )
 }
 
 fn impl_zoruafield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
@@ -84,14 +84,15 @@ fn impl_zoruafield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
             Did you mean to derive ZoruaBitField or ZoruaFallible?"
         )
     }
-    let ident = &ast.ident;
-    let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
-    quote! {
-        unsafe impl #impl_generics ZoruaField for #ident #type_generics #where_clause {
+
+    generate_impl(
+        "ZoruaField",
+        true,
+        ast,
+        quote! {
             fn swap_bytes_mut(&mut self) {}
-        }
-    }
-    .into()
+        },
+    )
 }
 
 #[proc_macro_derive(ZoruaBitField)]
@@ -114,10 +115,11 @@ fn impl_zoruabitfield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStrea
     }
     let wrapped_ty = &field0.ty;
 
-    let ident = &ast.ident;
-    let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
-    quote! {
-        impl #impl_generics ZoruaBitField for #ident #type_generics #where_clause {
+    generate_impl(
+        "ZoruaBitField",
+        false,
+        ast,
+        quote! {
             type BitRepr = <#wrapped_ty as ZoruaBitField>::BitRepr;
             fn to_bit_repr(self) -> Self::BitRepr {
                 self.0.to_bit_repr()
@@ -125,9 +127,8 @@ fn impl_zoruabitfield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStrea
             fn from_bit_repr(value: Self::BitRepr) -> Self {
                 Self(<#wrapped_ty as ZoruaBitField>::from_bit_repr(value))
             }
-        }
-    }
-    .into()
+        },
+    )
 }
 
 fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
@@ -185,10 +186,11 @@ fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         panic!("The disciriminants should cover every value from 0 to 2^n")
     }
 
-    let ident = &ast.ident;
-    let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
-    quote! {
-        impl #impl_generics ZoruaBitField for #ident #type_generics #where_clause {
+    generate_impl(
+        "ZoruaBitField",
+        false,
+        ast,
+        quote! {
             type BitRepr = #bit_repr;
             fn to_bit_repr(self) -> #bit_repr {
                 #bit_repr::from_backed(self as <#bit_repr as BackingBitField>::ByteRepr)
@@ -196,9 +198,8 @@ fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
             fn from_bit_repr(value: #bit_repr) -> Self {
                 unsafe { std::mem::transmute(value.to_backed() as <#bit_repr as BackingBitField>::ByteRepr) }
             }
-        }
-    }
-    .into()
+        },
+    )
 }
 
 /// On top of implementing the ZoruaFallible trait, this derive macro
@@ -268,6 +269,27 @@ fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         }
     }
     final_ts.into()
+}
+
+// --------------
+// Helper fns
+// --------------
+fn generate_impl(
+    ty: &str,
+    is_unsafe: bool,
+    ast: &DeriveInput,
+    tokens: proc_macro2::TokenStream,
+) -> TokenStream {
+    let ty: Type = syn::parse_str(ty).unwrap();
+    let ident = &ast.ident;
+    let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
+    let unsafe_keyword = is_unsafe.then_some(quote! {unsafe});
+    quote! {
+        #unsafe_keyword impl #impl_generics #ty for #ident #type_generics #where_clause {
+            #tokens
+        }
+    }
+    .into()
 }
 
 fn has_repr(attrs: &[Attribute], repr: &str) -> bool {
