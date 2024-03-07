@@ -6,11 +6,8 @@ To use `zorua` add the following dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-zorua = { git = "https://github.com/project-pku/zorua.git", tag="v0.4" }
+zorua = { git = "https://github.com/project-pku/zorua.git", tag="v0.5" }
 ```
-
-> [!WARNING]  
-> This crate currently uses **nightly**!
 
 ## Example
 To use the crate simply import the `prelude` module and use make use of the derive and `bitfields` macros:
@@ -21,7 +18,6 @@ use zorua::prelude::*;
 bitfields! {
     #[repr(C)]
     #[derive(ZoruaField)]
-    #[alignment(A4)]
     pub struct MyStruct {
         pub field_a: u32,
         pub field_b: u8,
@@ -47,17 +43,18 @@ There are two main traits this crate provides: `ZoruaField` and `ZoruaBitField`.
 ```rust
 use zorua::prelude::*;
 
-// Wrapper struct
+// Tuple struct
 #[derive(ZoruaField)]
 struct MyWrapperStruct(u8)
 
 // Composite struct
+#[repr(C)] //mandatory for structs w/ >1 field
 #[derive(ZoruaField)]
-#[alignment(A4)] //composite structs must include alignment annotation
 struct MyStruct {
   field_a: u32,
   field_b: u8,
-  field_c: MyWrapperStruct
+  field_c: MyWrapperStruct,
+  field_d: MyExhaustiveEnum,
 }
 
 // u8 Exhaustive enum
@@ -73,8 +70,8 @@ enum MyExhaustiveEnum {
 
 The `ZoruaField` trait enables the use of:
 - `to_le_mut` and `to_be_mut` which swaps the byte order, in-place, of the type to the target architecture's endianness.
-- `as_bytes` and `as_bytes_mut` which safely transmutes the type to an aligned byte array, up to mutability.
-- `from_bytes` and `from_bytes_mut` which safely transmutes an aligned byte array to an instance of the type, up to mutability.
+- `as_bytes_ref` and `as_bytes_mut` which safely transmutes a reference of `self` to a byte slice, up to mutability.
+- `try_from_bytes_ref` and `try_from_bytes_mut` which attempts to safely transmute a byte slice to a reference of `self`, up to mutability. If this cannot happen (i.e. missized/misaligned), an error will be returned.
 
 ### ZoruaBitField
 `ZoruaBitField` represents a type that can be represented as an *n*bit value. It can be derived on exhaustive c-like enums, or implemented manually for structs.
@@ -106,18 +103,19 @@ enum MyExhaustive2BitEnum {
   Variant1,
   Variant2,
   Variant3,
-  Variant4 //2^2 = 4
+  Variant4, //2^2 = 4
 }
 ```
 
 ## Bitfields
-You may be asking yourself, "`ZoruaField`s made sense, they are required for the safe transmutation of data types to byte arrays, and structured byte order swapping. But what is the point of `ZoruaBitField`s?" The answer is found in the `bitfield` macro. Consider the struct defined in the [example](#example) section:
+So, the `ZoruaField` trait is required for the safe transmutation of data types to byte slices, as well as provides a structured way to swap a struct's byte order. But what is the point of `ZoruaBitField`?
+
+The answer is found in the `bitfield` macro. Consider the struct defined in the [example](#example) section:
 
 ```rust
 bitfields! {
     #[repr(C)]
     #[derive(ZoruaField)]
-    #[alignment(A4)]
     pub struct MyStruct {
         pub field_a: u32,
         pub field_b: u8,
@@ -175,11 +173,12 @@ pub parent: u8,
 ```
 
 ## Fallible
-While the `ZoruaField` and `ZoruaBitField` traits deal with cover the case of exhaustive enums, what about non-exhaustive ones. After all, most enums don't happen to have a number of variants equal to a power of 2.
+While the `ZoruaField` and `ZoruaBitField` traits cover exhaustive enums, what about non-exhaustive ones. After all, it's unlikely your enum happens to have a number of variants equal to a power of 2.
 
-Enter the `ZoruaFallible` trait. Deriving this trait on a c-like enum, with an arbitrary number of variants, allows the use of the `Fallible` type in in fields and bitfields. For example:
+Enter the `ZoruaFallible` trait. Deriving this trait on a c-like enum, with an arbitrary number of variants, allows the use of the `Fallible` type in fields and bitfields. For example:
 
 ```rust
+#[repr(u8)]
 #[derive(ZoruaFallible)]
 #[targets(u3, u8)] //can be represented by both u8 and u3
 enum MyEnum {
@@ -187,15 +186,17 @@ enum MyEnum {
     Variant2,
     Variant3,
     Variant4,
-    Variant5
+    Variant5, //not a power of 2 (some bitpatterns are invalid)
 }
 
-struct MyTestStruct {
-  field_a: u16,
-  field_b: Fallible<MyEnum, u8>, //1 byte
-  field_c: u8,
-  |subfield_a: u2@0,
-  |subfield_b: Fallible<MyEnum, u3>@2, //3 bits
-  |subfield_c: bool@5,
+bitfields! {
+  struct MyTestStruct {
+    field_a: u16,
+    field_b: Fallible<MyEnum, u8>, //1 byte
+    field_c: u8,
+    |subfield_a: u2@0,
+    |subfield_b: Fallible<MyEnum, u3>@2, //3 bits
+    |subfield_c: bool@5,
+  }
 }
 ```
