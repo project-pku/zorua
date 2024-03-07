@@ -159,7 +159,7 @@ fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         match &variant.discriminant {
             None => {
                 if current >= num_variants {
-                    panic!("The disciriminants should cover every value from 0 to 2^n")
+                    panic!("The discriminants should cover every value from 0 to 2^n-1")
                 }
                 exists_vec[current] = true;
                 current += 1;
@@ -171,7 +171,7 @@ fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
                             .base10_parse()
                             .expect("Enum discriminants must be expressed in base 10");
                         if current >= num_variants {
-                            panic!("The disciriminants should cover every value from 0 to 2^n")
+                            panic!("The discriminants should cover every value from 0 to 2^n-1")
                         }
                         exists_vec[current] = true;
                         current += 1;
@@ -183,7 +183,7 @@ fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         }
     }
     if !exists_vec.iter().all(|value| *value) {
-        panic!("The disciriminants should cover every value from 0 to 2^n")
+        panic!("The discriminants should cover every value from 0 to 2^n-1")
     }
 
     generate_impl(
@@ -192,11 +192,14 @@ fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         ast,
         quote! {
             type BitRepr = #bit_repr;
-            fn to_bit_repr(self) -> #bit_repr {
-                #bit_repr::from_backed(self as <#bit_repr as BackingBitField>::ByteRepr)
+            fn to_bit_repr(self) -> Self::BitRepr {
+                Self::BitRepr::from_backed(self as <Self::BitRepr as BackingBitField>::ByteRepr)
             }
-            fn from_bit_repr(value: #bit_repr) -> Self {
-                unsafe { std::mem::transmute(value.to_backed() as <#bit_repr as BackingBitField>::ByteRepr) }
+            fn from_bit_repr(value: Self::BitRepr) -> Self {
+                // SAFETY:
+                // 1) Every possible value of BitRepr corresponds to a variant (as verified above)
+                // 2) alignment is not a concern for transmuting values (as opposed to references)
+                unsafe { std::mem::transmute(value.to_backed() as <Self::BitRepr as BackingBitField>::ByteRepr) }
             }
         },
     )
@@ -215,6 +218,8 @@ pub fn zoruafallible_derive_macro(item: TokenStream) -> TokenStream {
 
 fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
     let mut targets: Option<Vec<Type>> = None;
+    let repr: Type;
+
     for attr in &ast.attrs {
         if attr.path().is_ident("targets") {
             let data = syn::punctuated::Punctuated::<syn::Type, syn::Token![,]>::parse_terminated
@@ -229,28 +234,38 @@ fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         }
     }
 
-    let ident = ast.ident.clone();
-    let mut is_valid_impl = quote! {};
-    for variant in &data.variants {
-        if !variant.fields.is_empty() {
-            panic!("ZoruaFallible only supports c-like enums (i.e. no fields).")
-        }
-        let variant_ident = &variant.ident;
-        is_valid_impl.extend(quote! {
-            || (value == unsafe {std::mem::transmute(#ident::#variant_ident)})
-        });
+    if has_repr(&ast.attrs, "u8") {
+        repr = syn::parse_str("u8").unwrap();
+    } else if has_repr(&ast.attrs, "u16") {
+        repr = syn::parse_str("u16").unwrap();
+    } else {
+        panic!("The enum must have either the u8 or u16 repr")
     }
 
-    let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
-
-    let mut final_ts = quote! {};
     match targets {
         None => panic!("You must include at least 1 target type for the ZoruaFallible trait"),
         Some(targets) => {
+            let ident = ast.ident.clone();
+            let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
+            let mut final_ts = quote! {};
+
             for ty in targets {
+                //generate is_valid || arms
+                let mut is_valid_impl = quote! {};
+                for variant in &data.variants {
+                    if !variant.fields.is_empty() {
+                        panic!("ZoruaFallible only supports c-like enums (i.e. no fields).")
+                    }
+                    let variant_ident = &variant.ident;
+                    is_valid_impl.extend(quote! {
+                        || (backed_val == #ident::#variant_ident as <#ty as BackingBitField>::ByteRepr)
+                    });
+                }
+
                 final_ts.extend(quote! {
                     unsafe impl #impl_generics ZoruaFallible<#ty> for #ident #type_generics #where_clause {
                         fn is_valid(value: #ty) -> bool {
+                            let backed_val = <#ty as BackingBitField>::to_backed(value);
                             false #is_valid_impl
                         }
                     }
@@ -258,7 +273,13 @@ fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
                         type Error = #ty;
                         fn try_into(self) -> Result<#ident, #ty> {
                             if #ident::is_valid(self.value) {
-                                Ok(unsafe { std::mem::transmute_copy(&self) })
+                                let backed_value = <#ty as BackingBitField>::to_backed(self.value);
+                                // SAFETY:
+                                // 1) We have already ensured this is a c-like enum
+                                // 2) We just checked that this is a valid value
+                                // 3) The `as #repr` ensures that the backed_value is
+                                // same shape as the discriminant
+                                Ok(unsafe { std::mem::transmute(backed_value as #repr) })
                             } else {
                                 Err(self.value)
                             }
@@ -266,9 +287,9 @@ fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
                     }
                 });
             }
+            final_ts.into()
         }
     }
-    final_ts.into()
 }
 
 // --------------
@@ -299,7 +320,8 @@ fn has_repr(attrs: &[Attribute], repr: &str) -> bool {
             continue;
         }
         // If it doesn't match, reject it
-        if !format!("{}", attr.to_token_stream()).starts_with(&format!("#[repr({}", repr)) {
+        let attr = attr.to_token_stream().to_string();
+        if !attr.contains("#[repr(") || !attr.contains(repr) {
             continue;
         }
 
