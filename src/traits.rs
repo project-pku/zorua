@@ -1,4 +1,7 @@
-use std::mem;
+use std::{
+    mem,
+    num::{NonZeroU128, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8},
+};
 
 use crate::data_type::*;
 
@@ -70,6 +73,21 @@ macro_rules! impl_bit_backing {
                 const MASK: Self::ByteRepr = Self::MAX;
                 fn to_backed(self) -> Self::ByteRepr { self }
                 fn from_backed(value: Self::ByteRepr) -> Self { value }
+            }
+        )*
+    };
+}
+
+/// Automates boilerplate for implementing ZoruaField
+/// on unsigned Option<NonZero*> types
+macro_rules! impl_nonzero_zorua_field {
+    ($(($ty:ty, $ty2:ty)),*) => {
+        $(
+            unsafe impl ZoruaField for Option<$ty> {
+                fn swap_bytes_mut(&mut self) {
+                    let x: $ty2 = unsafe { mem::transmute((*self)) };
+                    *self = unsafe { mem::transmute(x.swap_bytes()) };
+                }
             }
         )*
     };
@@ -166,6 +184,13 @@ pub trait BackingField: ZoruaField + Copy + std::fmt::Debug + PartialEq {
 }
 
 impl_backing!(u8, u16, u32, u64, u128);
+impl_nonzero_zorua_field!(
+    (NonZeroU8, u8),
+    (NonZeroU16, u16),
+    (NonZeroU32, u32),
+    (NonZeroU64, u64),
+    (NonZeroU128, u128)
+);
 
 unsafe impl ZoruaField for () {
     fn swap_bytes_mut(&mut self) {}
