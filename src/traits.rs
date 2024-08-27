@@ -83,6 +83,7 @@ macro_rules! impl_bit_backing {
 macro_rules! impl_nonzero_zorua_field {
     ($(($ty:ty, $ty2:ty)),*) => {
         $(
+            #[allow(clippy::missing_transmute_annotations)] //needed to be generic over u8/u16/u32/u64
             unsafe impl ZoruaField for Option<$ty> {
                 fn swap_bytes_mut(&mut self) {
                     let x: $ty2 = unsafe { mem::transmute((*self)) };

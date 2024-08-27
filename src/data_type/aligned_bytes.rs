@@ -24,6 +24,12 @@ impl<A: Alignment, const N: usize> AlignedBytes<A, N> {
     }
 }
 
+impl<A: Alignment, const N: usize> Default for AlignedBytes<A, N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // -------------------------
 // Deref Impls
 // -------------------------
