@@ -1,8 +1,8 @@
 use proc_macro::TokenStream;
-use quote::{quote, ToTokens};
+use quote::quote;
 use syn::{
-    parse::Parser, parse_str, AttrStyle, Attribute, Data, DataEnum, DataStruct, DeriveInput, Expr,
-    Index, Lit, Type,
+    parse::Parser, parse_str, token, Attribute, Data, DataEnum, DataStruct, DeriveInput, Expr,
+    Index, Lit, LitInt, Type,
 };
 
 /// This derive macro works on structs and c-like enums.
@@ -30,7 +30,7 @@ pub fn zoruafield_derive_macro(item: TokenStream) -> TokenStream {
 
 fn impl_zoruafield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStream {
     //Ensure composite structs are repr C (otherwise size, alignment, and order are undefined)
-    if (data.fields.len() > 1) && !has_repr(&ast.attrs, "C") {
+    if (data.fields.len() > 1) && !get_repr_state(&ast.attrs).repr_c {
         panic!(
             "Composite structs must have the C repr to derive ZoruaField\n\
             Try adding `#[repr(C)]` to the struct"
@@ -72,7 +72,7 @@ fn impl_zoruafield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStream {
 
 fn impl_zoruafield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
     //These two conditions ensure enum is a POD
-    if !has_repr(&ast.attrs, "u8") {
+    if !get_repr_state(&ast.attrs).repr_u8 {
         panic!(
             "Enums must have the u8 repr to derive ZoruaField\n\
             Try adding `#[repr(u8)]` to the struct"
@@ -132,7 +132,7 @@ fn impl_zoruabitfield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStrea
 }
 
 fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
-    if !has_repr(&ast.attrs, "u8") {
+    if !get_repr_state(&ast.attrs).repr_u8 {
         panic!("The enum must have the u8 repr, i.e. #[repr(u8)]")
     }
 
@@ -234,10 +234,11 @@ fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         }
     }
 
-    if has_repr(&ast.attrs, "u8") {
-        repr = syn::parse_str("u8").unwrap();
-    } else if has_repr(&ast.attrs, "u16") {
+    let repr_state = get_repr_state(&ast.attrs);
+    if repr_state.repr_u16 {
         repr = syn::parse_str("u16").unwrap();
+    } else if repr_state.repr_u8 {
+        repr = syn::parse_str("u8").unwrap();
     } else {
         panic!("The enum must have either the u8 or u16 repr")
     }
@@ -313,19 +314,66 @@ fn generate_impl(
     .into()
 }
 
-fn has_repr(attrs: &[Attribute], repr: &str) -> bool {
-    for attr in attrs {
-        // If the style isn't outer, reject it
-        if !matches!(attr.style, AttrStyle::Outer) {
-            continue;
-        }
-        // If it doesn't match, reject it
-        let attr = attr.to_token_stream().to_string();
-        if !attr.contains("#[repr(") || !attr.contains(repr) {
-            continue;
-        }
+#[allow(unused)]
+struct ReprState {
+    repr_c: bool,
+    repr_u8: bool,
+    repr_u16: bool,
+    repr_packed: Option<usize>,
+}
 
-        return true;
+fn get_repr_state(attrs: &[Attribute]) -> ReprState {
+    let mut repr_c = false;
+    let mut repr_u8 = false;
+    let mut repr_u16 = false;
+    let mut repr_packed = None::<usize>;
+    for attr in attrs {
+        if attr.path().is_ident("repr") {
+            let res = attr.parse_nested_meta(|meta| {
+                // #[repr(C)]
+                if meta.path.is_ident("C") {
+                    repr_c = true;
+                    return Ok(());
+                }
+
+                // #[repr(u8)]
+                if meta.path.is_ident("u8") {
+                    repr_u8 = true;
+                    return Ok(());
+                }
+
+                // #[repr(u16)]
+                if meta.path.is_ident("u16") {
+                    repr_u16 = true;
+                    return Ok(());
+                }
+
+                // #[repr(packed)] or #[repr(packed(N))], omitted N means 1
+                if meta.path.is_ident("packed") {
+                    if meta.input.peek(token::Paren) {
+                        let content;
+                        syn::parenthesized!(content in meta.input);
+                        let lit: LitInt = content.parse()?;
+                        let n: usize = lit.base10_parse()?;
+                        repr_packed = Some(n);
+                    } else {
+                        repr_packed = Some(1);
+                    }
+                    return Ok(());
+                }
+
+                Ok(()) //ignore unparsed reprs
+            });
+            if let Err(e) = res {
+                panic!("zorua crate failed to parse repr attribute: {}", e);
+            }
+        }
     }
-    false
+
+    ReprState {
+        repr_c,
+        repr_u8,
+        repr_u16,
+        repr_packed,
+    }
 }
