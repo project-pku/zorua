@@ -8,5 +8,5 @@ edition = "2021"
 
 [dependencies]
 paste = "1.0.14"
-ux2 = "0.8.5"
+ux2 = { version = "0.8.5", features = ["16"] }
 zorua_macro = { path = "zorua_macro" }
