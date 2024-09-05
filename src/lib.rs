@@ -60,4 +60,138 @@ pub mod prelude {
         };
     }
     pub use bitfields;
+
+    /// Transmutes a [`ZoruaField`] or [`AlignedBytes`] type into another
+    /// `ZoruaField` or `AlignedBytes` type.
+    ///
+    /// The macro will reject any types that do not satisfy the following:
+    /// - The transmuted types must have the same size.
+    /// - For `AlignedBytes`, [`AlignedBytes::HAS_PADDING`] must be false.
+    ///
+    /// An example:
+    /// ```
+    /// let x = ZfTypeA::new(); //ZfTypeA
+    /// let y = transmute!(ZfTypeA, ZfTypeB, x); //ZfTypeB
+    /// ```
+    ///
+    /// ## Note:
+    /// The alignment of the `src` and `dst` types are not checked, as this
+    /// is unnecessary for transmuting *values* (see [`std::mem::transmute`]).
+    #[macro_export]
+    macro_rules! transmute {
+        ($src:ty, $dst:ty, $val:expr) => {{
+            const fn _assert_implements_transmutable<T: Transmutable>() {}
+
+            _assert_implements_transmutable::<$src>(); //in is Transmutable
+            _assert_implements_transmutable::<$dst>(); //out is Transmutable
+            const _NO_PADDING_SRC: () = assert!(!<$src>::HAS_PADDING); //in has no padding
+            const _NO_PADDING_DST: () = assert!(!<$dst>::HAS_PADDING); //out has no padding
+            unsafe { std::mem::transmute::<$src, $dst>($val) } //in/out sizes are equal
+        }};
+    }
+    pub use transmute;
+
+    /// A shorthand for [`transmute!(bytes_type!(DST), DST, val)`](macro@crate::transmute).
+    #[macro_export]
+    macro_rules! transmute_from_bytes {
+        ($dst:ty, $val:expr) => {
+            transmute!(bytes_type!($dst), $dst, $val)
+        };
+    }
+    pub use transmute_from_bytes;
+
+    /// A shorthand for [`transmute!(SRC, bytes_type!(SRC), val)`](macro@crate::transmute).
+    #[macro_export]
+    macro_rules! transmute_to_bytes {
+        ($src:ty, $val:expr) => {
+            transmute!($src, bytes_type!($src), $val)
+        };
+    }
+    pub use transmute_to_bytes;
+
+    /// Transmutes a [Box]ed [`ZoruaField`] or [`AlignedBytes`] type into another
+    /// boxed `ZoruaField` or `AlignedBytes` type.
+    ///
+    /// The macro will reject any types that do not satisfy the following:
+    /// - The transmuted types must have the same size.
+    /// - The alignment of the `src` type must be >= the alignment of the `dst` type.
+    /// - For `AlignedBytes`, [`AlignedBytes::HAS_PADDING`] must be false.
+    ///
+    /// An example:
+    /// ```
+    /// let x = Box::new(ZfTypeA::new()); //Box<ZfTypeA>
+    /// let y = box_transmute!(ZfTypeA, ZfTypeB, x); //Box<ZfTypeB>
+    /// ```
+    ///
+    /// ## Note:
+    /// Unlike [`macro@crate::transmute`], this transmutation is alignment sensitive
+    /// due to the indirection intoduced by `Box`.
+    #[macro_export]
+    macro_rules! box_transmute {
+        ($src:ty, $dst:ty, $val:expr) => {{
+            const fn _assert_implements_transmutable<T: Transmutable>() {}
+
+            _assert_implements_transmutable::<$src>(); //src is Transmutable
+            _assert_implements_transmutable::<$dst>(); //dst is Transmutable
+            const _NO_PADDING_SRC: () = assert!(!<$src>::HAS_PADDING); //src has no padding
+            const _NO_PADDING_DST: () = assert!(!<$dst>::HAS_PADDING); //dst has no padding
+
+            //types have same size (unlike transmute we have to check it ourselves)
+            const _SIZE_CHECK: () =
+                assert!(std::mem::size_of::<$src>() == std::mem::size_of::<$dst>());
+            //types have compatible alignments (must check due to indirection)
+            const _ALIGN_CHECK: () =
+                assert!(std::mem::align_of::<$src>() >= std::mem::align_of::<$dst>());
+
+            unsafe {
+                let foo_ptr: *mut $src = Box::into_raw($val);
+                let bar_ptr: *mut $dst = foo_ptr as *mut $dst;
+                Box::from_raw(bar_ptr)
+            }
+        }};
+    }
+    pub use box_transmute;
+
+    /// A shorthand for [`box_transmute!(bytes_type!(DST), DST, val)`](macro@crate::box_transmute).
+    #[macro_export]
+    macro_rules! box_transmute_from_bytes {
+        ($dst:ty, $val:expr) => {
+            box_transmute!(bytes_type!($dst), $dst, $val)
+        };
+    }
+    pub use box_transmute_from_bytes;
+
+    /// A shorthand for [`box_transmute!(SRC, bytes_type!(SRC), val)`](macro@crate::box_transmute).
+    #[macro_export]
+    macro_rules! box_transmute_to_bytes {
+        ($src:ty, $val:expr) => {
+            box_transmute!($src, bytes_type!($src), $val)
+        };
+    }
+    pub use box_transmute_to_bytes;
+
+    /// Shorthand for the [`AlignedBytes`] type with the same size and
+    /// alignment as the input type. For example:
+    ///
+    /// ```
+    /// //ALIGN = 2, SIZE = 4
+    /// struct MyStruct {
+    ///     a: u16,
+    ///     b: u16,
+    /// }
+    /// assert_eq!(
+    ///     TypeId::of::<AlignedBytes<2, 4>>>(),
+    ///     TypeId::of::<bytes_type!(MyStruct)>()
+    /// ); //passes
+    /// ```
+    #[macro_export]
+    macro_rules! bytes_type {
+        ($ty:ty) => {
+            AlignedBytes<
+                { std::mem::align_of::<$ty>() },
+                { std::mem::size_of::<$ty>() }
+            >
+        }
+    }
+    pub use bytes_type;
 }
