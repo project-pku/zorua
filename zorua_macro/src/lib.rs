@@ -1,8 +1,8 @@
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{quote, ToTokens};
 use syn::{
     parse::Parser, parse_str, token, Attribute, Data, DataEnum, DataStruct, DeriveInput, Expr,
-    Index, Lit, LitInt, Type,
+    Index, Lit, LitInt, LitStr, Type,
 };
 
 /// This derive macro works on structs and c-like enums.
@@ -18,7 +18,7 @@ use syn::{
 ///     fieldB: OtherZoruaField,
 /// }
 /// ```
-#[proc_macro_derive(ZoruaField)]
+#[proc_macro_derive(ZoruaField, attributes(copy_on_swap))]
 pub fn zoruafield_derive_macro(item: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(item).unwrap(); //parse
     match &ast.data {
@@ -37,23 +37,63 @@ fn impl_zoruafield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStream {
         )
     }
 
+    let mut copy_on_swap: Option<Vec<_>> = None;
+    for attr in &ast.attrs {
+        if attr.path().is_ident("copy_on_swap") {
+            let data = syn::punctuated::Punctuated::<LitStr, syn::Token![,]>::parse_terminated
+                .parse2(attr.parse_args().expect(
+                    "The `copy_on_swap` attribute must should contain a list of field names, e.g. #[copy_on_swap(\"field_a\")]",
+                ))
+                .unwrap();
+
+            if !data.is_empty() {
+                copy_on_swap = Some(Vec::from_iter(data.iter().map(|lit| lit.value())));
+            }
+        }
+    }
+
     let mut fields_impl = quote! {};
     for (i, field) in data.fields.iter().enumerate() {
         //Build up swap_bytes_mut fn
         fields_impl.extend(match &field.ident {
             // Struct fields
             Some(field_ident) => {
-                quote! {
-                    ZoruaField::swap_bytes_mut(&mut self.#field_ident);
+                if copy_on_swap.is_some()
+                    && copy_on_swap
+                        .as_ref()
+                        .unwrap()
+                        .contains(&field_ident.to_token_stream().to_string())
+                {
+                    quote! {
+                        let mut x = self.#field_ident;
+                        ZoruaField::swap_bytes_mut(&mut x);
+                        self.#field_ident = x;
+                    }
+                } else {
+                    quote! {
+                        ZoruaField::swap_bytes_mut(&mut self.#field_ident);
+                    }
                 }
             }
             // Tuple fields
             None => {
                 let index = Index::from(i);
-                let tokens = quote! {
-                    ZoruaField::swap_bytes_mut(&mut self.#index);
-                };
-                tokens
+                if copy_on_swap.is_some()
+                    && copy_on_swap
+                        .as_ref()
+                        .unwrap()
+                        .contains(&index.to_token_stream().to_string())
+                {
+                    quote! {
+                        let mut x = self.#index;
+                        ZoruaField::swap_bytes_mut(&mut x);
+                        self.#index = x;
+                    }
+                } else {
+                    quote! {
+                        ZoruaField::swap_bytes_mut(&mut self.#index);
+                    }
+                }
             }
         });
     }
