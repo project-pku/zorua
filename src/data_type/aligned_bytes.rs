@@ -29,6 +29,17 @@ where
             value: bytes,
         }
     }
+
+    /// Use this for large allocations better suited to the heap.
+    ///
+    /// This fn also deals with [the boxed array issue in Rust](https://github.com/rust-lang/rust/issues/53827).
+    pub fn new_boxed() -> Box<AlignedBytes<ALIGN, N>> {
+        let layout = std::alloc::Layout::new::<AlignedBytes<ALIGN, N>>();
+        unsafe {
+            let ptr = std::alloc::alloc(layout) as *mut AlignedBytes<ALIGN, N>;
+            Box::from_raw(ptr)
+        }
+    }
 }
 
 impl<const ALIGN: usize, const N: usize> Default for AlignedBytes<ALIGN, N>
