@@ -42,7 +42,7 @@ macro_rules! impl_backing {
 /// Automates boilerplate for implementing ZoruaBitField
 /// and BackingBitField on arbitrary-int & built-in int types
 macro_rules! impl_bit_backing {
-    ("arbitrary_u8", $($ty:ty),*) => {
+    ("arbitrary", $backing:ty, $($ty:ty),*) => {
         $(
             impl ZoruaBitField for $ty {
                 type BitRepr = Self;
@@ -50,7 +50,7 @@ macro_rules! impl_bit_backing {
                 fn from_bit_repr(value: Self::BitRepr) -> Self { value }
             }
             impl BackingBitField for $ty {
-                type ByteRepr = u8;
+                type ByteRepr = $backing;
                 const MASK: Self::ByteRepr = unsafe { std::mem::transmute(<$ty>::MAX) };
                 fn to_backed(self) -> Self::ByteRepr {
                     self.into()
@@ -248,7 +248,8 @@ pub trait BackingBitField: ZoruaBitField + Copy {
     fn from_backed(value: Self::ByteRepr) -> Self;
 }
 
-impl_bit_backing!("arbitrary_u8", u1, u2, u3, u4, u5, u6, u7);
+impl_bit_backing!("arbitrary", u8, u1, u2, u3, u4, u5, u6, u7);
+impl_bit_backing!("arbitrary", u16, u9, u10, u11, u12, u13, u14, u15);
 impl_bit_backing!("native", u8, u16, u32, u64, u128);
 
 impl ZoruaBitField for bool {
