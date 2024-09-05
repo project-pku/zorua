@@ -111,6 +111,23 @@ macro_rules! impl_zorua_field_for_tuple {
     };
 }
 
+//------------- Transmutable trait + impls -------------
+/// # Safety
+/// This trait should only be implemented by types that intened to be
+/// transmutable to/from a type that implements [ZoruaField].
+pub unsafe trait Transmutable {
+    const HAS_PADDING: bool;
+}
+unsafe impl<T: ZoruaField> Transmutable for T {
+    const HAS_PADDING: bool = false;
+}
+unsafe impl<const ALIGN: usize, const SIZE: usize> Transmutable for AlignedBytes<ALIGN, SIZE>
+where
+    Align<ALIGN>: Alignment,
+{
+    const HAS_PADDING: bool = SIZE % ALIGN != 0;
+}
+
 //------------- Field trait + impls -------------
 /// const assertion that ensures that target has a known
 /// endianness, so that the [ZoruaField] trait is well-formed.
