@@ -94,6 +94,23 @@ macro_rules! impl_nonzero_zorua_field {
     };
 }
 
+/// Automates boilerplate for implementing ZoruaField
+/// on tuples of ZoruaFields
+macro_rules! impl_zorua_field_for_tuple {
+    // Base case: single item tuple
+    ($($T:ident),*) => {
+        #[allow(non_snake_case)]
+        unsafe impl<$($T: ZoruaField),*> ZoruaField for ($($T,)*) {
+                    fn swap_bytes_mut(&mut self) {
+                let ($($T,)*) = self;
+                $(
+                    $T.swap_bytes_mut();
+                )*
+            }
+        }
+    };
+}
+
 //------------- Field trait + impls -------------
 /// const assertion that ensures that target has a known
 /// endianness, so that the [ZoruaField] trait is well-formed.
@@ -204,6 +221,13 @@ unsafe impl<const N: usize, T: ZoruaField> ZoruaField for [T; N] {
         });
     }
 }
+
+impl_zorua_field_for_tuple!(T, U);
+impl_zorua_field_for_tuple!(T, U, V);
+impl_zorua_field_for_tuple!(T, U, V, W);
+impl_zorua_field_for_tuple!(T, U, V, W, X);
+impl_zorua_field_for_tuple!(T, U, V, W, X, Y);
+impl_zorua_field_for_tuple!(T, U, V, W, X, Y, Z);
 
 //----------- BitField trait + impls -----------
 pub trait ZoruaBitField {
