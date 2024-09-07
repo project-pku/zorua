@@ -7,6 +7,7 @@ use crate::traits::ZoruaField;
 #[repr(C, packed)]
 #[derive(ZoruaField, Clone, Copy, Debug, PartialEq, Eq)]
 #[copy_on_swap("0")]
+#[unsafe_confirm_no_padding]
 pub struct Unaligned<T: ZoruaField + Copy>(T);
 
 impl<T: ZoruaField + Copy> Unaligned<T> {
