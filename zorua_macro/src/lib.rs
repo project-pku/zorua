@@ -1,8 +1,8 @@
 use proc_macro::TokenStream;
-use quote::{quote, ToTokens};
+use quote::{quote, quote_spanned, ToTokens};
 use syn::{
-    parse::Parser, parse_str, token, Attribute, Data, DataEnum, DataStruct, DeriveInput, Expr,
-    Index, Lit, LitInt, LitStr, Type,
+    parse::Parser, parse_str, token, Attribute, Data, DataEnum, DataStruct, DataUnion, DeriveInput,
+    Expr, Fields, Index, Lit, LitInt, LitStr, Type,
 };
 
 /// This derive macro works on structs and c-like enums.
@@ -18,7 +18,7 @@ use syn::{
 ///     fieldB: OtherZoruaField,
 /// }
 /// ```
-#[proc_macro_derive(ZoruaField, attributes(copy_on_swap))]
+#[proc_macro_derive(ZoruaField, attributes(copy_on_swap, unsafe_confirm_no_padding))]
 pub fn zoruafield_derive_macro(item: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(item).unwrap(); //parse
     match &ast.data {
@@ -35,6 +35,21 @@ fn impl_zoruafield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStream {
             "Composite structs must have the C repr to derive ZoruaField\n\
             Try adding `#[repr(C)]` to the struct"
         )
+    }
+
+    let no_generics = ast.generics.params.is_empty();
+
+    let unsafe_confirm_no_padding = ast
+        .attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("unsafe_confirm_no_padding"));
+
+    if !no_generics && !unsafe_confirm_no_padding {
+        panic!("You must manually verify that the generic structs has no padding due to its layout. You can confirm this by adding the `unsafe_no_padding` attribute.")
+    }
+
+    if no_generics && unsafe_confirm_no_padding {
+        panic!("The `unsafe_no_padding` attribute can only be used with generic structs.")
     }
 
     let mut copy_on_swap: Option<Vec<_>> = None;
@@ -107,6 +122,12 @@ fn impl_zoruafield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStream {
                 #fields_impl
             }
         },
+        //NOTE: Allow packed structs to skip the padding check?
+        if no_generics {
+            Some(generate_assert_no_padding(ast))
+        } else {
+            None
+        },
     )
 }
 
@@ -132,6 +153,7 @@ fn impl_zoruafield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         quote! {
             fn swap_bytes_mut(&mut self) {}
         },
+        None,
     )
 }
 
@@ -168,6 +190,7 @@ fn impl_zoruabitfield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStrea
                 Self(<#wrapped_ty as ZoruaBitField>::from_bit_repr(value))
             }
         },
+        None,
     )
 }
 
@@ -242,6 +265,7 @@ fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
                 unsafe { std::mem::transmute(value.to_backed() as <Self::BitRepr as BackingBitField>::ByteRepr) }
             }
         },
+        None,
     )
 }
 
@@ -341,6 +365,7 @@ fn generate_impl(
     is_unsafe: bool,
     ast: &DeriveInput,
     tokens: proc_macro2::TokenStream,
+    asserts: Option<proc_macro2::TokenStream>,
 ) -> TokenStream {
     let ty: Type = syn::parse_str(ty).unwrap();
     let ident = &ast.ident;
@@ -349,6 +374,10 @@ fn generate_impl(
     quote! {
         #unsafe_keyword impl #impl_generics #ty for #ident #type_generics #where_clause {
             #tokens
+        }
+
+        impl #impl_generics #ident #type_generics #where_clause {
+            #asserts
         }
     }
     .into()
@@ -415,5 +444,40 @@ fn get_repr_state(attrs: &[Attribute]) -> ReprState {
         repr_u8,
         repr_u16,
         repr_packed,
+    }
+}
+
+fn get_field_types(fields: &Fields) -> impl Iterator<Item = &'_ Type> {
+    fields.iter().map(|field| &field.ty)
+}
+
+fn get_fields(input: &DeriveInput) -> Fields {
+    match &input.data {
+        Data::Struct(DataStruct { fields, .. }) => fields.clone(),
+        Data::Union(DataUnion { fields, .. }) => Fields::Named(fields.clone()),
+        Data::Enum(_) => panic!("Enums are not supported"),
+    }
+}
+
+fn generate_assert_no_padding(input: &DeriveInput) -> proc_macro2::TokenStream {
+    let struct_type = &input.ident;
+    let span = input.ident.span();
+    let fields = get_fields(input);
+
+    let mut field_types = get_field_types(&fields);
+    let size_sum = if let Some(first) = field_types.next() {
+        let size_first = quote_spanned!(span => ::core::mem::size_of::<#first>());
+        let size_rest = quote_spanned!(span => #( + ::core::mem::size_of::<#field_types>() )*);
+        quote_spanned!(span => #size_first #size_rest)
+    } else {
+        quote_spanned!(span => 0)
+    };
+
+    //NOTE: This works but does not provide a very helpful error message...
+    quote! {
+        #[doc(hidden)]
+        const _ZORUA_PADDING_CHECK: fn() = || {
+            let _ = ::core::mem::transmute::<#struct_type, [u8; #size_sum]>;
+        };
     }
 }
