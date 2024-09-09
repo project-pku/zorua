@@ -1,14 +1,10 @@
 use crate::traits::{BackingBitField, BackingField, ZoruaBitField, ZoruaField};
-use std::{
-    fmt::{Debug, Formatter},
-    marker::PhantomData,
-    mem::transmute_copy,
-};
+use std::{marker::PhantomData, mem};
 
 /// A wrapper type for enums that may have invalid discriminant values.
 ///
 /// Used when reading data that might contain values outside the enum's valid range.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fallible<T: ZoruaFallible<B>, B> {
     _marker: PhantomData<T>,
     pub value: B,
@@ -38,7 +34,7 @@ impl<T: ZoruaFallible<B>, B> Fallible<T, B> {
     pub fn from_value(value: T) -> Fallible<T, B> {
         Fallible {
             _marker: Default::default(),
-            value: unsafe { transmute_copy(&value) },
+            value: unsafe { mem::transmute_copy(&value) },
         }
     }
 
@@ -73,17 +69,5 @@ impl<T: ZoruaFallible<B>, B: BackingBitField> ZoruaBitField for Fallible<T, B> {
 impl<T: ZoruaFallible<B>, B> From<T> for Fallible<T, B> {
     fn from(value: T) -> Self {
         Self::from_value(value)
-    }
-}
-
-impl<T: ZoruaFallible<B>, B: PartialEq> PartialEq for Fallible<T, B> {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
-    }
-}
-
-impl<T: ZoruaFallible<B>, B: Debug> Debug for Fallible<T, B> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.value.fmt(f)
     }
 }
