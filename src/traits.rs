@@ -1,5 +1,5 @@
 use std::{
-    mem,
+    mem::{self, ManuallyDrop},
     num::{NonZeroU128, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8},
 };
 
@@ -201,6 +201,29 @@ pub unsafe trait ZoruaField: Sized {
             Err(CastError::AlignmentTooStrict)
         } else {
             Ok(unsafe { &mut *(bytes.as_mut_ptr() as *mut Self) })
+        }
+    }
+
+    /// Transmutes `self` into a different [`ZoruaField`] type `T`.
+    /// This is useful for transmuting between dependently-sized `ZouraFields`
+    /// where the caller can assure the equality of the two types' sizes.
+    ///
+    /// Unlike the [`macro@crate::transmute`] macro, this function can
+    /// only transmute between `ZoruaField`s, and does not check the sizes
+    /// of the types (hence the `unsafe` marker).
+    ///
+    /// # Safety
+    /// The caller must ensure that the sizes of `Self` and `T` are equal.
+    unsafe fn transmute_size_blind<T: ZoruaField>(self) -> T {
+        unsafe {
+            // Prevent `a` from being dropped
+            let mut a = ManuallyDrop::new(self);
+
+            // Cast the pointer of `a` to the pointer of the desired type
+            let ptr = &mut *a as *mut Self as *mut T;
+
+            // Read the value from the pointer
+            ptr.read()
         }
     }
 }
