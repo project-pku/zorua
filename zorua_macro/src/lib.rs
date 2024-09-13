@@ -1,8 +1,8 @@
 use proc_macro::TokenStream;
-use quote::{quote, quote_spanned, ToTokens};
+use quote::{quote, quote_spanned};
 use syn::{
-    parse::Parser, parse_str, token, Attribute, Data, DataEnum, DataStruct, DataUnion, DeriveInput,
-    Expr, Fields, Index, Lit, LitInt, LitStr, Type,
+    Attribute, Data, DataEnum, DataStruct, DataUnion, DeriveInput, Expr, Fields, Lit, LitInt, Type,
+    parse::Parser, parse_str, token,
 };
 
 /// This derive macro works on structs and c-like enums.
@@ -18,7 +18,7 @@ use syn::{
 ///     fieldB: OtherZoruaField,
 /// }
 /// ```
-#[proc_macro_derive(ZoruaField, attributes(copy_on_swap, unsafe_confirm_no_padding))]
+#[proc_macro_derive(ZoruaField, attributes(unsafe_confirm_no_padding))]
 pub fn zoruafield_derive_macro(item: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(item).unwrap(); //parse
     match &ast.data {
@@ -52,76 +52,11 @@ fn impl_zoruafield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStream {
         panic!("The `unsafe_no_padding` attribute can only be used with generic structs.")
     }
 
-    let mut copy_on_swap: Option<Vec<_>> = None;
-    for attr in &ast.attrs {
-        if attr.path().is_ident("copy_on_swap") {
-            let data = syn::punctuated::Punctuated::<LitStr, syn::Token![,]>::parse_terminated
-                .parse2(attr.parse_args().expect(
-                    "The `copy_on_swap` attribute must should contain a list of field names, e.g. #[copy_on_swap(\"field_a\")]",
-                ))
-                .unwrap();
-
-            if !data.is_empty() {
-                copy_on_swap = Some(Vec::from_iter(data.iter().map(|lit| lit.value())));
-            }
-        }
-    }
-
-    let mut fields_impl = quote! {};
-    for (i, field) in data.fields.iter().enumerate() {
-        //Build up swap_bytes_mut fn
-        fields_impl.extend(match &field.ident {
-            // Struct fields
-            Some(field_ident) => {
-                if copy_on_swap.is_some()
-                    && copy_on_swap
-                        .as_ref()
-                        .unwrap()
-                        .contains(&field_ident.to_token_stream().to_string())
-                {
-                    quote! {
-                        let mut x = self.#field_ident;
-                        ZoruaField::swap_bytes_mut(&mut x);
-                        self.#field_ident = x;
-                    }
-                } else {
-                    quote! {
-                        ZoruaField::swap_bytes_mut(&mut self.#field_ident);
-                    }
-                }
-            }
-            // Tuple fields
-            None => {
-                let index = Index::from(i);
-                if copy_on_swap.is_some()
-                    && copy_on_swap
-                        .as_ref()
-                        .unwrap()
-                        .contains(&index.to_token_stream().to_string())
-                {
-                    quote! {
-                        let mut x = self.#index;
-                        ZoruaField::swap_bytes_mut(&mut x);
-                        self.#index = x;
-                    }
-                } else {
-                    quote! {
-                        ZoruaField::swap_bytes_mut(&mut self.#index);
-                    }
-                }
-            }
-        });
-    }
-
     generate_impl(
         "ZoruaField",
         true,
         ast,
-        quote! {
-            fn swap_bytes_mut(&mut self) {
-                #fields_impl
-            }
-        },
+        None,
         //NOTE: Allow packed structs to skip the padding check?
         if no_generics {
             Some(generate_assert_no_padding(ast))
@@ -146,15 +81,7 @@ fn impl_zoruafield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         )
     }
 
-    generate_impl(
-        "ZoruaField",
-        true,
-        ast,
-        quote! {
-            fn swap_bytes_mut(&mut self) {}
-        },
-        None,
-    )
+    generate_impl("ZoruaField", true, ast, None, None)
 }
 
 #[proc_macro_derive(ZoruaBitField)]
@@ -181,7 +108,7 @@ fn impl_zoruabitfield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStrea
         "ZoruaBitField",
         false,
         ast,
-        quote! {
+        Some(quote! {
             type BitRepr = <#wrapped_ty as ZoruaBitField>::BitRepr;
             fn to_bit_repr(self) -> Self::BitRepr {
                 self.0.to_bit_repr()
@@ -189,7 +116,7 @@ fn impl_zoruabitfield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStrea
             fn from_bit_repr(value: Self::BitRepr) -> Self {
                 Self(<#wrapped_ty as ZoruaBitField>::from_bit_repr(value))
             }
-        },
+        }),
         None,
     )
 }
@@ -253,7 +180,7 @@ fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         "ZoruaBitField",
         false,
         ast,
-        quote! {
+        Some(quote! {
             type BitRepr = #bit_repr;
             fn to_bit_repr(self) -> Self::BitRepr {
                 Self::BitRepr::from_backed(self as <Self::BitRepr as BackingBitField>::ByteRepr)
@@ -264,7 +191,7 @@ fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
                 // 2) alignment is not a concern for transmuting values (as opposed to references)
                 unsafe { std::mem::transmute(value.to_backed() as <Self::BitRepr as BackingBitField>::ByteRepr) }
             }
-        },
+        }),
         None,
     )
 }
@@ -364,7 +291,7 @@ fn generate_impl(
     ty: &str,
     is_unsafe: bool,
     ast: &DeriveInput,
-    tokens: proc_macro2::TokenStream,
+    tokens: Option<proc_macro2::TokenStream>,
     asserts: Option<proc_macro2::TokenStream>,
 ) -> TokenStream {
     let ty: Type = syn::parse_str(ty).unwrap();

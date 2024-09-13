@@ -46,11 +46,7 @@ impl<T: ZoruaFallible<B>, B> Fallible<T, B> {
     }
 }
 
-unsafe impl<T: ZoruaFallible<B>, B: BackingField> ZoruaField for Fallible<T, B> {
-    fn swap_bytes_mut(&mut self) {
-        B::swap_bytes_mut(&mut self.value)
-    }
-}
+unsafe impl<T: ZoruaFallible<B>, B: BackingField> ZoruaField for Fallible<T, B> {}
 
 impl<T: ZoruaFallible<B>, B: BackingBitField> ZoruaBitField for Fallible<T, B> {
     type BitRepr = B;
