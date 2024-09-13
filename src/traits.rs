@@ -30,11 +30,7 @@ macro_rules! impl_backing {
                     *self |= (Into::<$ty>::into(value.to_backed())) << index;
                 }
             }
-            unsafe impl ZoruaField for $ty {
-                fn swap_bytes_mut(&mut self) {
-                    *self = (*self).swap_bytes();
-                }
-            }
+            unsafe impl ZoruaField for $ty {}
         )*
     };
 }
@@ -83,13 +79,7 @@ macro_rules! impl_bit_backing {
 macro_rules! impl_nonzero_zorua_field {
     ($(($ty:ty, $ty2:ty)),*) => {
         $(
-            #[allow(clippy::missing_transmute_annotations)] //needed to be generic over u8/u16/u32/u64
-            unsafe impl ZoruaField for Option<$ty> {
-                fn swap_bytes_mut(&mut self) {
-                    let x: $ty2 = unsafe { mem::transmute((*self)) };
-                    *self = unsafe { mem::transmute(x.swap_bytes()) };
-                }
-            }
+            unsafe impl ZoruaField for Option<$ty> {}
         )*
     };
 }
@@ -97,17 +87,8 @@ macro_rules! impl_nonzero_zorua_field {
 /// Automates boilerplate for implementing ZoruaField
 /// on tuples of ZoruaFields
 macro_rules! impl_zorua_field_for_tuple {
-    // Base case: single item tuple
     ($($T:ident),*) => {
-        #[allow(non_snake_case)]
-        unsafe impl<$($T: ZoruaField),*> ZoruaField for ($($T,)*) {
-                    fn swap_bytes_mut(&mut self) {
-                let ($($T,)*) = self;
-                $(
-                    $T.swap_bytes_mut();
-                )*
-            }
-        }
+        unsafe impl<$($T: ZoruaField),*> ZoruaField for ($($T,)*) {}
     };
 }
 
@@ -148,30 +129,7 @@ pub enum CastError {
 /// # Safety
 /// This trait is safe to implement *iff*:
 /// - `Self` a *POD*, which is to say any possible bit pattern produces a valid instance of it.
-/// - The [ZoruaField::swap_bytes_mut] method is properly implemented. For primitive types it
-/// simply swaps the byte order, for composite types it swaps the byte order of all its fields.
 pub unsafe trait ZoruaField: Sized {
-    /// Swaps the byte order of self in-place.
-    fn swap_bytes_mut(&mut self);
-
-    /// Swaps the byte order of self in-place iff the target is big endian
-    /// (is a no-op on little endian targets).
-    fn to_le_mut(&mut self) {
-        #[cfg(target_endian = "big")]
-        {
-            self.swap_bytes_mut();
-        }
-    }
-
-    /// Swaps the byte order of self in-place iff the target is little endian
-    /// (is a no-op on big endian targets).
-    fn to_be_mut(&mut self) {
-        #[cfg(target_endian = "little")]
-        {
-            self.swap_bytes_mut();
-        }
-    }
-
     fn as_bytes_ref(&self) -> &[u8] {
         let len = std::mem::size_of_val(self);
         let slf: *const Self = self;
@@ -250,17 +208,9 @@ impl_nonzero_zorua_field!(
     (NonZeroU128, u128)
 );
 
-unsafe impl ZoruaField for () {
-    fn swap_bytes_mut(&mut self) {}
-}
+unsafe impl ZoruaField for () {}
 
-unsafe impl<const N: usize, T: ZoruaField> ZoruaField for [T; N] {
-    fn swap_bytes_mut(&mut self) {
-        self.iter_mut().for_each(|value| {
-            value.swap_bytes_mut();
-        });
-    }
-}
+unsafe impl<const N: usize, T: ZoruaField> ZoruaField for [T; N] {}
 
 impl_zorua_field_for_tuple!(T, U);
 impl_zorua_field_for_tuple!(T, U, V);
