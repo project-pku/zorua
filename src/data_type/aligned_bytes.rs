@@ -23,10 +23,10 @@ where
         }
     }
 
-    pub const fn from_bytes(bytes: [u8; N]) -> AlignedBytes<ALIGN, N> {
+    pub fn from_bytes(bytes: &[u8; N]) -> AlignedBytes<ALIGN, N> {
         AlignedBytes {
             _alignment: [],
-            value: bytes,
+            value: *bytes,
         }
     }
 
