@@ -1,8 +1,8 @@
-use elain::{Align, Alignment};
-use std::{
+use core::{
     mem,
     ops::{Deref, DerefMut},
 };
+use elain::{Align, Alignment};
 
 use crate::traits::ZoruaField;
 
@@ -47,8 +47,9 @@ where
     /// Use this for large allocations better suited to the heap.
     ///
     /// This fn also deals with [the boxed array issue in Rust](https://github.com/rust-lang/rust/issues/53827).
+    #[cfg(feature = "std")]
     pub fn new_boxed() -> Box<AlignedBytes<ALIGN, N>> {
-        let layout = std::alloc::Layout::new::<AlignedBytes<ALIGN, N>>();
+        let layout = core::alloc::Layout::new::<AlignedBytes<ALIGN, N>>();
         unsafe {
             let ptr = std::alloc::alloc(layout) as *mut AlignedBytes<ALIGN, N>;
             Box::from_raw(ptr)

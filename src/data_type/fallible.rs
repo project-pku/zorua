@@ -1,5 +1,5 @@
 use crate::traits::{BackingBitField, BackingField, ZoruaBitField, ZoruaField};
-use std::{marker::PhantomData, mem};
+use core::{marker::PhantomData, mem};
 
 /// A wrapper type for enums that may have invalid discriminant values.
 ///

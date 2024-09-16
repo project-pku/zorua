@@ -1,4 +1,4 @@
-use std::{
+use core::{
     mem,
     num::{NonZeroU128, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8},
 };
@@ -19,7 +19,7 @@ macro_rules! impl_backing {
                         ((self & (Into::<$ty>::into(T::MASK) << index)) >> index).try_into().unwrap_or_else(
                             |_| {
                                 panic!("Zorua Error: The BitRepr::MASK of type {} must be wrong",
-                                    std::any::type_name::<$ty>())
+                                    core::any::type_name::<$ty>())
                             }
                         )
                     )
@@ -47,7 +47,7 @@ macro_rules! impl_bit_backing {
             }
             impl BackingBitField for $ty {
                 type ByteRepr = $backing;
-                const MASK: Self::ByteRepr = unsafe { std::mem::transmute(<$ty>::MAX) };
+                const MASK: Self::ByteRepr = unsafe { core::mem::transmute(<$ty>::MAX) };
                 fn to_backed(self) -> Self::ByteRepr {
                     self.into()
                 }
@@ -110,12 +110,12 @@ pub const fn compatible_layout<T, U>() -> bool {
 pub unsafe trait ZoruaField: Sized {
     fn as_bytes(&self) -> &[u8] {
         let slf: *const Self = self;
-        unsafe { std::slice::from_raw_parts(slf.cast::<u8>(), mem::size_of::<Self>()) }
+        unsafe { core::slice::from_raw_parts(slf.cast::<u8>(), mem::size_of::<Self>()) }
     }
 
     fn as_bytes_mut(&mut self) -> &mut [u8] {
         let slf: *mut Self = self;
-        unsafe { std::slice::from_raw_parts_mut(slf.cast::<u8>(), mem::size_of::<Self>()) }
+        unsafe { core::slice::from_raw_parts_mut(slf.cast::<u8>(), mem::size_of::<Self>()) }
     }
 
     /// Transmutes a [`ZoruaField`] into another with a [`compatible_layout`].
@@ -126,6 +126,7 @@ pub unsafe trait ZoruaField: Sized {
         unsafe { crate::unconditional_transmute(self) }
     }
 
+    #[cfg(feature = "std")]
     fn box_transmute<T: ZoruaField>(self: Box<Self>) -> Box<T>
     where
         [(); compatible_layout::<Self, T>() as usize - 1]:,
@@ -185,7 +186,7 @@ where
 /// A special kind of [ZoruaField] that can house [ZoruaBitField]s.
 ///
 /// (Practically speaking, just the built-in uints.)
-pub trait BackingField: ZoruaField + Copy + std::fmt::Debug + PartialEq {
+pub trait BackingField: ZoruaField + Copy + core::fmt::Debug + PartialEq {
     fn get_bits_at<T: BackingBitField>(self, index: usize) -> T
     where
         Self: From<T::ByteRepr> + TryInto<T::ByteRepr>;

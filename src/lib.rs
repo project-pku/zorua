@@ -1,5 +1,6 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 pub mod data_type;
 pub mod traits;
@@ -82,8 +83,8 @@ pub mod prelude {
     macro_rules! aligned_bytes_of {
         ($ty:ty) => {
             AlignedBytes<
-                { std::mem::align_of::<$ty>() },
-                { std::mem::size_of::<$ty>() }
+                { core::mem::align_of::<$ty>() },
+                { core::mem::size_of::<$ty>() }
             >
         }
     }
@@ -96,7 +97,7 @@ pub mod prelude {
 /// `T` is greater than or equal to `U`).
 pub(crate) unsafe fn unconditional_transmute<T, U>(val: T) -> U {
     // Prevent `val` from being dropped
-    let mut val = std::mem::ManuallyDrop::new(val);
+    let mut val = core::mem::ManuallyDrop::new(val);
 
     // Cast the pointer of `val` to the pointer of the desired type
     let ptr = &mut *val as *mut T as *mut U;
