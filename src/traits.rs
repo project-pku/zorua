@@ -3,7 +3,7 @@ use std::{
     num::{NonZeroU128, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8},
 };
 
-use crate::data_type::*;
+use crate::{aligned_bytes_of, data_type::*};
 
 pub use zorua_macro::*;
 
@@ -149,6 +149,36 @@ pub unsafe trait ZoruaField: Sized {
         [(); compatible_layout::<Self, T>() as usize - 1]:,
     {
         unsafe { mem::transmute(self) }
+    }
+
+    fn into_aligned_bytes(self) -> aligned_bytes_of!(Self)
+    where
+        Align<{ mem::align_of::<Self>() }>: Alignment,
+    {
+        unsafe { crate::unconditional_transmute(self) }
+    }
+
+    fn as_aligned_bytes(&self) -> &aligned_bytes_of!(Self)
+    where
+        Align<{ mem::align_of::<Self>() }>: Alignment,
+    {
+        unsafe { mem::transmute(self) }
+    }
+
+    fn as_aligned_bytes_mut(&mut self) -> &mut aligned_bytes_of!(Self)
+    where
+        Align<{ mem::align_of::<Self>() }>: Alignment,
+    {
+        unsafe { mem::transmute(self) }
+    }
+}
+
+impl<T: ZoruaField> From<T> for aligned_bytes_of!(T)
+where
+    Align<{ mem::align_of::<T>() }>: Alignment,
+{
+    fn from(value: T) -> Self {
+        value.into_aligned_bytes()
     }
 }
 
