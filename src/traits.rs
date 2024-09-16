@@ -153,21 +153,21 @@ pub unsafe trait ZoruaField: Sized {
 
     fn into_aligned_bytes(self) -> aligned_bytes_of!(Self)
     where
-        Align<{ mem::align_of::<Self>() }>: Alignment,
+        AlignOf<Self>: Alignment,
     {
         unsafe { crate::unconditional_transmute(self) }
     }
 
     fn as_aligned_bytes(&self) -> &aligned_bytes_of!(Self)
     where
-        Align<{ mem::align_of::<Self>() }>: Alignment,
+        AlignOf<Self>: Alignment,
     {
         unsafe { mem::transmute(self) }
     }
 
     fn as_aligned_bytes_mut(&mut self) -> &mut aligned_bytes_of!(Self)
     where
-        Align<{ mem::align_of::<Self>() }>: Alignment,
+        AlignOf<Self>: Alignment,
     {
         unsafe { mem::transmute(self) }
     }
@@ -175,7 +175,7 @@ pub unsafe trait ZoruaField: Sized {
 
 impl<T: ZoruaField> From<T> for aligned_bytes_of!(T)
 where
-    Align<{ mem::align_of::<T>() }>: Alignment,
+    AlignOf<T>: Alignment,
 {
     fn from(value: T) -> Self {
         value.into_aligned_bytes()
