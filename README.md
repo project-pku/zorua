@@ -9,6 +9,9 @@ To use `zorua` add the following dependency to your `Cargo.toml`:
 zorua = { git = "https://github.com/project-pku/zorua.git", tag="v0.6" }
 ```
 
+> [!WARNING]  
+> This crate currently uses **nightly**!
+
 ## Features
 To use the crate simply import the `prelude` module.
 
