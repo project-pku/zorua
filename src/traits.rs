@@ -130,16 +130,14 @@ pub enum CastError {
 /// This trait is safe to implement *iff*:
 /// - `Self` a *POD*, which is to say any possible bit pattern produces a valid instance of it.
 pub unsafe trait ZoruaField: Sized {
-    fn as_bytes_ref(&self) -> &[u8] {
-        let len = std::mem::size_of_val(self);
+    fn as_bytes(&self) -> &[u8] {
         let slf: *const Self = self;
-        unsafe { std::slice::from_raw_parts(slf.cast::<u8>(), len) }
+        unsafe { std::slice::from_raw_parts(slf.cast::<u8>(), mem::size_of::<Self>()) }
     }
 
     fn as_bytes_mut(&mut self) -> &mut [u8] {
-        let len = mem::size_of_val(self);
         let slf: *mut Self = self;
-        unsafe { std::slice::from_raw_parts_mut(slf.cast::<u8>(), len) }
+        unsafe { std::slice::from_raw_parts_mut(slf.cast::<u8>(), mem::size_of::<Self>()) }
     }
 
     fn try_from_bytes_ref(bytes: &[u8]) -> Result<&Self, CastError> {
