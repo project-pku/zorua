@@ -92,23 +92,6 @@ macro_rules! impl_zorua_field_for_tuple {
     };
 }
 
-//------------- Transmutable trait + impls -------------
-/// # Safety
-/// This trait should only be implemented by types that intened to be
-/// transmutable to/from a type that implements [ZoruaField].
-pub unsafe trait Transmutable {
-    const HAS_PADDING: bool;
-}
-unsafe impl<T: ZoruaField> Transmutable for T {
-    const HAS_PADDING: bool = false;
-}
-unsafe impl<const ALIGN: usize, const SIZE: usize> Transmutable for AlignedBytes<ALIGN, SIZE>
-where
-    Align<ALIGN>: Alignment,
-{
-    const HAS_PADDING: bool = SIZE % ALIGN != 0;
-}
-
 //------------- Field trait + impls -------------
 /// const assertion that ensures that target has a known
 /// endianness, so that the [ZoruaField] trait is well-formed.
@@ -116,6 +99,10 @@ const _: () = assert!(
     cfg!(target_endian = "big") || cfg!(target_endian = "little"),
     "This crate can only be compiled on little or big endian systems"
 );
+
+pub const fn compatible_layout<T, U>() -> bool {
+    mem::size_of::<T>() == mem::size_of::<U>() && mem::align_of::<T>() >= mem::align_of::<U>()
+}
 
 #[derive(Debug)]
 pub enum CastError {
@@ -160,18 +147,23 @@ pub unsafe trait ZoruaField: Sized {
         }
     }
 
-    /// Transmutes `self` into a different [`ZoruaField`] type `T`.
-    /// This is useful for transmuting between dependently-sized `ZouraFields`
-    /// where the caller can assure the equality of the two types' sizes.
-    ///
-    /// Unlike the [`macro@crate::transmute`] macro, this function can
-    /// only transmute between `ZoruaField`s, and does not check the sizes
-    /// of the types (hence the `unsafe` marker).
-    ///
-    /// # Safety
-    /// The caller must ensure that the sizes of `Self` and `T` are equal.
-    unsafe fn transmute_size_blind<T: ZoruaField>(self) -> T {
-        crate::unconditional_transmute(self)
+    /// Transmutes a [`ZoruaField`] into another with a [`compatible_layout`].
+    fn transmute<T: ZoruaField>(self) -> T
+    where
+        [(); compatible_layout::<Self, T>() as usize - 1]:,
+    {
+        unsafe { crate::unconditional_transmute(self) }
+    }
+
+    fn box_transmute<T: ZoruaField>(self: Box<Self>) -> Box<T>
+    where
+        [(); compatible_layout::<Self, T>() as usize - 1]:,
+    {
+        unsafe {
+            let foo_ptr: *mut Self = Box::into_raw(self);
+            let bar_ptr: *mut T = foo_ptr as *mut T;
+            Box::from_raw(bar_ptr)
+        }
     }
 }
 
