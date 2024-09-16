@@ -221,3 +221,18 @@ pub mod prelude {
     }
     pub use weaken_bytes_align;
 }
+
+/// # Safety
+/// The caller must ensure that both sizes `T` and `U` are equal
+/// and their alignments are compatible (i.e. the alignment of
+/// `T` is greater than or equal to `U`).
+pub(crate) unsafe fn unconditional_transmute<T, U>(val: T) -> U {
+    // Prevent `val` from being dropped
+    let mut val = std::mem::ManuallyDrop::new(val);
+
+    // Cast the pointer of `val` to the pointer of the desired type
+    let ptr = &mut *val as *mut T as *mut U;
+
+    // Read the value from the pointer
+    ptr.read()
+}
