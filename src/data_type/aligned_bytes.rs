@@ -1,5 +1,8 @@
 use elain::{Align, Alignment};
-use std::ops::{Deref, DerefMut};
+use std::{
+    mem,
+    ops::{Deref, DerefMut},
+};
 
 use crate::traits::ZoruaField;
 
@@ -48,6 +51,31 @@ where
             let ptr = std::alloc::alloc(layout) as *mut AlignedBytes<ALIGN, N>;
             Box::from_raw(ptr)
         }
+    }
+
+    pub fn chunk<const CHUNK_SIZE: usize>(self) -> [AlignedBytes<ALIGN, CHUNK_SIZE>; N / CHUNK_SIZE]
+    where
+        [(); (N % CHUNK_SIZE == 0) as usize - 1]: Sized,
+    {
+        unsafe { crate::unconditional_transmute(self) }
+    }
+
+    pub fn chunk_ref<const CHUNK_SIZE: usize>(
+        &self,
+    ) -> &[AlignedBytes<ALIGN, CHUNK_SIZE>; N / CHUNK_SIZE]
+    where
+        [(); (N % CHUNK_SIZE == 0) as usize - 1]: Sized,
+    {
+        unsafe { mem::transmute(self) }
+    }
+
+    pub fn chunk_mut<const CHUNK_SIZE: usize>(
+        &mut self,
+    ) -> &mut [AlignedBytes<ALIGN, CHUNK_SIZE>; N / CHUNK_SIZE]
+    where
+        [(); (N % CHUNK_SIZE == 0) as usize - 1]: Sized,
+    {
+        unsafe { mem::transmute(self) }
     }
 
     /// Transmutes an [`AlignedBytes`] type into another `AlignedBytes`
