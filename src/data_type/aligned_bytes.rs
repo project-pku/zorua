@@ -40,6 +40,26 @@ where
             Box::from_raw(ptr)
         }
     }
+
+    /// Transmutes an [`AlignedBytes`] type into another `AlignedBytes`
+    /// type with a potentially weaker (i.e. lower) alignment.
+    ///
+    /// Usage:
+    /// ```
+    /// let x = AlignedBytes::<4, 20>::new();
+    /// let y: AlignedBytes<2, 20> = x.weaken_alignment::<2>();
+    /// ```
+    ///
+    /// Note that the fn will only compile if:
+    /// - The desired alignment is a power of 2.
+    /// - The new alignment is equal or weaker (i.e. lower) than the old alignment.
+    pub fn weaken_alignment<const NEW_ALIGN: usize>(self) -> AlignedBytes<NEW_ALIGN, N>
+    where
+        Align<NEW_ALIGN>: Alignment,
+        [(); (ALIGN >= NEW_ALIGN) as usize - 1]:,
+    {
+        unsafe { crate::unconditional_transmute(self) }
+    }
 }
 
 impl<const ALIGN: usize, const N: usize> Default for AlignedBytes<ALIGN, N>
