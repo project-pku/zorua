@@ -1,6 +1,8 @@
 use elain::{Align, Alignment};
 use std::ops::{Deref, DerefMut};
 
+use crate::traits::ZoruaField;
+
 /// A smart pointer for a length `N` array that guarantees an alignment of `ALIGN`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AlignedBytes<const ALIGN: usize, const N: usize>
@@ -9,6 +11,13 @@ where
 {
     _alignment: [Align<ALIGN>; 0],
     value: [u8; N],
+}
+
+unsafe impl<const ALIGN: usize, const N: usize> ZoruaField for AlignedBytes<ALIGN, N>
+where
+    Align<ALIGN>: Alignment,
+    [(); (N % ALIGN == 0) as usize - 1]: Sized,
+{
 }
 
 impl<const ALIGN: usize, const N: usize> AlignedBytes<ALIGN, N>
