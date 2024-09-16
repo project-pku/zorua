@@ -189,7 +189,7 @@ fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
                 // SAFETY:
                 // 1) Every possible value of BitRepr corresponds to a variant (as verified above)
                 // 2) alignment is not a concern for transmuting values (as opposed to references)
-                unsafe { std::mem::transmute(value.to_backed() as <Self::BitRepr as BackingBitField>::ByteRepr) }
+                unsafe { core::mem::transmute(value.to_backed() as <Self::BitRepr as BackingBitField>::ByteRepr) }
             }
         }),
         None,
@@ -271,7 +271,7 @@ fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
                                 // 2) We just checked that this is a valid value
                                 // 3) The `as #repr` ensures that the backed_value is
                                 // same shape as the discriminant
-                                Ok(unsafe { std::mem::transmute(backed_value as #repr) })
+                                Ok(unsafe { core::mem::transmute(backed_value as #repr) })
                             } else {
                                 Err(self.value)
                             }

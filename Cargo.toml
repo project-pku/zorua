@@ -6,6 +6,10 @@ name = "zorua"
 version = "0.6.0"
 edition = "2021"
 
+[features]
+default = ["std"]
+std = []
+
 [dependencies]
 paste = "1.0.14"
 ux2 = { version = "0.8.5", features = ["16"] }

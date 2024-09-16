@@ -1,5 +1,5 @@
 use crate::traits::{BackingBitField, BackingField, ZoruaBitField, ZoruaField};
-use std::{marker::PhantomData, mem};
+use core::{marker::PhantomData, mem};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fallible<T: ZoruaFallible<B>, B> {
