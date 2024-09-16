@@ -197,32 +197,6 @@ pub mod prelude {
         }
     }
     pub use bytes_type;
-
-    /// Transmutes an [`AlignedBytes`] type into another `AlignedBytes`
-    /// type with a weaker (i.e. lower) alignment.
-    ///
-    /// Usage:
-    /// ```
-    /// let x = AlignedBytes::<4, 20>::new();
-    /// let y = weaken_bytes_alignment!(4 => 2, 20, x); //AlignedBytes<2, 4>
-    /// ```
-    ///
-    /// Note that the conversion will fail if:
-    /// - The desired alignment is not a power of 2.
-    /// - The new alignment is stricter (i.e. higher) than the old alignment.
-    /// - If the length of the arrays are not equal.
-    /// - If the old `AlignedBytes` and the new `AlignedBytes` have different
-    /// sizes. This can happen even if they are of the same length due to
-    /// differences in padding caused by different alignments. (e.g. 4,1 -> 2,1)
-    #[macro_export]
-    macro_rules! weaken_bytes_align {
-        ($old_align:expr => $new_align:expr, $size:expr, $bytes:expr) => {{
-            let bytes: AlignedBytes<$old_align, $size> = $bytes;
-            const _: () = assert!($old_align >= $new_align);
-            unsafe { std::mem::transmute::<_, AlignedBytes<$new_align, $size>>(bytes) }
-        }};
-    }
-    pub use weaken_bytes_align;
 }
 
 /// # Safety
