@@ -1,5 +1,5 @@
 use std::{
-    mem::{self, ManuallyDrop},
+    mem,
     num::{NonZeroU128, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8},
 };
 
@@ -171,16 +171,7 @@ pub unsafe trait ZoruaField: Sized {
     /// # Safety
     /// The caller must ensure that the sizes of `Self` and `T` are equal.
     unsafe fn transmute_size_blind<T: ZoruaField>(self) -> T {
-        unsafe {
-            // Prevent `a` from being dropped
-            let mut a = ManuallyDrop::new(self);
-
-            // Cast the pointer of `a` to the pointer of the desired type
-            let ptr = &mut *a as *mut Self as *mut T;
-
-            // Read the value from the pointer
-            ptr.read()
-        }
+        crate::unconditional_transmute(self)
     }
 }
 
