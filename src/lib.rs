@@ -75,11 +75,11 @@ pub mod prelude {
     /// }
     /// assert_eq!(
     ///     TypeId::of::<AlignedBytes<2, 4>>>(),
-    ///     TypeId::of::<bytes_type!(MyStruct)>()
+    ///     TypeId::of::<aligned_bytes_of!(MyStruct)>()
     /// ); //passes
     /// ```
     #[macro_export]
-    macro_rules! bytes_type {
+    macro_rules! aligned_bytes_of {
         ($ty:ty) => {
             AlignedBytes<
                 { std::mem::align_of::<$ty>() },
@@ -87,7 +87,7 @@ pub mod prelude {
             >
         }
     }
-    pub use bytes_type;
+    pub use aligned_bytes_of;
 }
 
 /// # Safety
