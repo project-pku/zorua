@@ -104,15 +104,6 @@ pub const fn compatible_layout<T, U>() -> bool {
     mem::size_of::<T>() == mem::size_of::<U>() && mem::align_of::<T>() >= mem::align_of::<U>()
 }
 
-#[derive(Debug)]
-pub enum CastError {
-    /// Denotes that the size of the target type and the byte slice.
-    SizeMismatch,
-
-    /// Denotes that the alignment of the target type was stricter than the byte slice.
-    AlignmentTooStrict,
-}
-
 /// # Safety
 /// This trait is safe to implement *iff*:
 /// - `Self` a *POD*, which is to say any possible bit pattern produces a valid instance of it.
@@ -125,26 +116,6 @@ pub unsafe trait ZoruaField: Sized {
     fn as_bytes_mut(&mut self) -> &mut [u8] {
         let slf: *mut Self = self;
         unsafe { std::slice::from_raw_parts_mut(slf.cast::<u8>(), mem::size_of::<Self>()) }
-    }
-
-    fn try_from_bytes_ref(bytes: &[u8]) -> Result<&Self, CastError> {
-        if bytes.len() != mem::size_of::<Self>() {
-            Err(CastError::SizeMismatch)
-        } else if (bytes.as_ptr() as *const ()).align_offset(mem::align_of::<Self>()) != 0 {
-            Err(CastError::AlignmentTooStrict)
-        } else {
-            Ok(unsafe { &*(bytes.as_ptr() as *const Self) })
-        }
-    }
-
-    fn try_from_bytes_mut(bytes: &mut [u8]) -> Result<&mut Self, CastError> {
-        if bytes.len() != mem::size_of::<Self>() {
-            Err(CastError::SizeMismatch)
-        } else if (bytes.as_ptr() as *const ()).align_offset(mem::align_of::<Self>()) != 0 {
-            Err(CastError::AlignmentTooStrict)
-        } else {
-            Ok(unsafe { &mut *(bytes.as_mut_ptr() as *mut Self) })
-        }
     }
 
     /// Transmutes a [`ZoruaField`] into another with a [`compatible_layout`].
@@ -164,6 +135,20 @@ pub unsafe trait ZoruaField: Sized {
             let bar_ptr: *mut T = foo_ptr as *mut T;
             Box::from_raw(bar_ptr)
         }
+    }
+
+    fn transmute_ref<T: ZoruaField>(&self) -> &T
+    where
+        [(); compatible_layout::<Self, T>() as usize - 1]:,
+    {
+        unsafe { mem::transmute(self) }
+    }
+
+    fn transmute_mut<T: ZoruaField>(&mut self) -> &mut T
+    where
+        [(); compatible_layout::<Self, T>() as usize - 1]:,
+    {
+        unsafe { mem::transmute(self) }
     }
 }
 
