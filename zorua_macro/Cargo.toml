@@ -3,9 +3,9 @@ name = "zorua_macro"
 edition = "2024"
 
 [dependencies]
-proc-macro2 = "1.0.78"
-quote = "1.0.35"
-syn = "2.0.48"
+proc-macro2 = "^1.0.78"
+quote = "^1.0.35"
+syn = "^2.0.48"
 
 [lib]
 proc-macro = true
