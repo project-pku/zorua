@@ -9,7 +9,7 @@ use crate::traits::ZoruaField;
 pub type AlignOf<T> = Align<{ mem::align_of::<T>() }>;
 
 /// A smart pointer for a length `N` array that guarantees an alignment of `ALIGN`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AlignedBytes<const ALIGN: usize, const N: usize>
 where
     Align<ALIGN>: Alignment,
