@@ -103,5 +103,5 @@ pub(crate) unsafe fn unconditional_transmute<T, U>(val: T) -> U {
     let ptr = &mut *val as *mut T as *mut U;
 
     // Read the value from the pointer
-    ptr.read()
+    unsafe { ptr.read() }
 }

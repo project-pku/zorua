@@ -4,7 +4,7 @@ members = ["zorua_macro"]
 [package]
 name = "zorua"
 version = "0.6.0"
-edition = "2021"
+edition = "2024"
 
 [features]
 default = ["std"]

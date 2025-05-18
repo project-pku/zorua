@@ -1,6 +1,6 @@
 [package]
 name = "zorua_macro"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 proc-macro2 = "1.0.78"
