@@ -152,6 +152,30 @@ pub unsafe trait ZoruaField: Sized {
         unsafe { mem::transmute(self) }
     }
 
+    fn transmute_split_ref<A: ZoruaField, B: ZoruaField>(&self) -> (&A, &B)
+    where
+        [(); compatible_layout::<Self, (A, B)>() as usize - 1]:,
+    {
+        unsafe {
+            let base = self as *const Self as *const u8;
+            let a_ptr = base as *const A;
+            let b_ptr = base.add(mem::size_of::<A>()) as *const B;
+            (&*a_ptr, &*b_ptr)
+        }
+    }
+
+    fn transmute_split_mut<A: ZoruaField, B: ZoruaField>(&mut self) -> (&mut A, &mut B)
+    where
+        [(); compatible_layout::<Self, (A, B)>() as usize - 1]:,
+    {
+        unsafe {
+            let base = self as *mut Self as *mut u8;
+            let a_ptr = base as *mut A;
+            let b_ptr = base.add(mem::size_of::<A>()) as *mut B;
+            (&mut *a_ptr, &mut *b_ptr)
+        }
+    }
+
     fn into_aligned_bytes(self) -> aligned_bytes_of!(Self)
     where
         AlignOf<Self>: Alignment,
