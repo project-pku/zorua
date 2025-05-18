@@ -45,7 +45,9 @@ fn impl_zoruafield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStream {
         .any(|attr| attr.path().is_ident("unsafe_confirm_no_padding"));
 
     if !no_generics && !unsafe_confirm_no_padding {
-        panic!("You must manually verify that the generic structs has no padding due to its layout. You can confirm this by adding the `unsafe_no_padding` attribute.")
+        panic!(
+            "You must manually verify that the generic structs has no padding due to its layout. You can confirm this by adding the `unsafe_no_padding` attribute."
+        )
     }
 
     if no_generics && unsafe_confirm_no_padding {
@@ -361,7 +363,7 @@ fn get_repr_state(attrs: &[Attribute]) -> ReprState {
                 Ok(()) //ignore unparsed reprs
             });
             if let Err(e) = res {
-                panic!("zorua crate failed to parse repr attribute: {}", e);
+                panic!("zorua crate failed to parse repr attribute: {e}");
             }
         }
     }
