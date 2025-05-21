@@ -6,11 +6,14 @@ To use `zorua` add the following dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-zorua = { git = "https://github.com/project-pku/zorua.git", tag="v0.6" }
+zorua = { git = "https://github.com/project-pku/zorua.git", tag="v0.7" }
 ```
 
 > [!WARNING]  
 > This crate currently uses **nightly**!
+
+> [!NOTE]
+> zorua supports `no_std` environments by disabling the default `std` feature.
 
 ## Features
 To use the crate simply import the `prelude` module.
@@ -18,12 +21,37 @@ To use the crate simply import the `prelude` module.
 The `zorua` crate was created to enable the following features safely, and within a [zero-copy](https://en.wikipedia.org/wiki/Zero-copy) context:
 
 - [Transmutation](#transmutation)
-- [Endian awareness](#endian-awareness)
 - [Bitfields](#bitfields)
-- [Enum awareness](#endian-awareness)
+- [Enums](#enums)
 
 ### Transmutation
-By deriving the `ZoruaField` trait, a struct can be transmuted to an raw `AlignedBytes` struct (this is just a `[u8;N]` that maintains it's alignment):
+Deriving the `ZoruaField` trait places conditions on the implementing type to ensure safety. All these conditions are checked at compile time:
+
+- Must have a compatible repr (`C` for structs, `u8` for enums)
+- Must have no padding
+- All it's fields must be types that implement `ZoruaField`
+
+The `ZoruaField` trait provides multiple transmutation methods:
+- `transmute<T>()` - Convert to another ZoruaField type (owned)
+- `transmute_ref<T>()` - Get a reference to the data as another type
+- `transmute_mut<T>()` - Get a mutable reference to the data as another type
+- `transmute_split_ref<A, B>()` - Split a reference into two adjacent parts
+- `transmute_split_mut<A, B>()` - Split a mutable reference into two adjacent parts
+- `box_transmute<T>()` - Convert a boxed value to another type (requires `std` feature)
+
+> [!NOTE]
+> These methods can only be used if the target type has the same size and an equal or lower alignment as the source type. We call this condition having a **compatible layout**, and these methods validate it at compile time.
+
+The `ZoruaField` trait also provides convinience methods for transmuting structs into aligned bytes specifically:
+- `into_aligned_bytes()` - Convert to AlignedBytes
+- `as_aligned_bytes()` - Get a reference to the data as AlignedBytes
+- `as_aligned_bytes_mut()` - Get a mutable reference to the data as AlignedBytes
+
+> [!NOTE]
+> The `AlignedBytes<ALIGN, SIZE>` type is an array of bytes of size `SIZE` with an alignment `ALIGN` known at compile time.
+The trait also provides raw byte access:
+- `as_bytes()` - Get a byte slice view of the data
+- `as_bytes_mut()` - Get a mutable byte slice view of the data
 
 
 ```rust
@@ -37,59 +65,35 @@ struct MyStruct {
     field_c: u16,
 }
 
+// Same size and alignment as MyStruct
+// i.e. compatible layout
+#[repr(C)]
+#[derive(ZoruaField, Clone)]
+struct MyStruct2 {
+    field_1: u16,
+    field_2: u16,
+}
+
 fn main() {
     let myStruct = MyStruct {
         field_a: 0,
         field_b: 2,
         field_c: 5,
-    }
+    };
 
-    let bytes = transmute_to_bytes!(MyStruct, myStruct);
-    println!("{}", bytes[1]); // "2"
+    // Transmute to another ZoruaField of w/ compatible layout
+    let myStruct2: MyStruct2 = myStruct.transmute();
+
+    // Convert to aligned bytes
+    let bytes = myStruct2.clone().into_aligned_bytes();
+    
+    // Or use the transmutation fn instead
+    let bytes: aligned_bytes_of!(MyStruct) = myStruct2.transmute();
 }
 ```
 
-Deriving `ZoruaField` places conditions on the implementing type to ensure safety. All these conditions are checked at compile time:
-
-- Must have a compatible repr (`C` for structs, `u8` for enums)
-- Must have no padding
-- All it's fields must be types that implement `ZoruaField`
-
-Also note that there are 3 macros for transmuting structs:
-- `transmute_to_bytes!` for ZoruaField -> bytes
-- `transmute_from_bytes!` for bytes -> ZoruaField
-- `transmute!` for bytes/ZouraField -> bytes/ZoruaField. The other two are just shorthand for this one.
-
-### Endian Awareness
-Any type that implements the `ZoruaField` trait comes equipped with fns for switching the endianness of a struct in-place:
-
-```rust 
-use zorua::prelude::*;
-
-#[repr(C)]
-#[derive(ZoruaField)]
-struct MyStruct {
-    field: u16,
-}
-
-fn main() {
-    let myStruct = MyStruct {
-        field_a: 0x01ABCDEF,
-    }
-
-    //convert to big-endian if on little-endian machine
-    #[cfg(target_endian = "little")]
-    self.to_be_mut();
-
-    //convert to little-endian if on big-endian machine
-    #[cfg(target_endian = "big")]
-    self.to_le_mut();
-
-    println!("{:#X}", myStruct.field_a); //"0xEFCDAB01"
-}
-``` 
-
-It is up to the user to determine if they want to switch the endianness before they operate on a transmuted struct (e.g. manipulating a big-endian struct on a little-endian machine).
+> [!NOTE]
+> The `aligned_bytes_of!(T)` macro simply returns `AlignedBytes<{mem::align_of::<T>()}, {mem::size_of::<T>()}>`. It is useful for type annotations.
 
 ### Bitfields
 The `zorua` crate also supports adding virtual *bitfields* to your structs:
