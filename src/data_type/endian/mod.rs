@@ -24,6 +24,9 @@
 
 mod conversions;
 
+#[cfg(feature = "num-traits")]
+mod num_traits_impl;
+
 use core::{fmt::Debug, marker::PhantomData};
 
 // Marker types for endianness
