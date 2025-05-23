@@ -22,7 +22,10 @@
 //! let value: U16<Big> = FromBytes::from_be_bytes(&[0x12, 0x34]);
 //! ```
 
+mod aliases;
 mod conversions;
+
+pub use aliases::*;
 
 #[cfg(feature = "num-traits")]
 mod num_traits_impl;
@@ -111,19 +114,19 @@ mod tests {
     #[test]
     fn test_u32_endian() {
         // Big-endian roundtrip
-        let big_endian_value: U32<Big> = U32::from(0x12345678u32);
+        let big_endian_value: u32_be = u32_be::from(0x12345678u32);
         assert_eq!(big_endian_value.to_native(), 0x12345678);
 
         // Little-endian roundtrip
-        let little_endian_value: U32<Little> = U32::from(0x12345678u32);
+        let little_endian_value: u32_le = u32_le::from(0x12345678u32);
         assert_eq!(little_endian_value.to_native(), 0x12345678);
     }
 
     #[test]
     fn test_endian_behavior() {
         // Test that big and little-endian actually store bytes differently
-        let big_val: U16<Big> = U16::from(0x1234u16);
-        let little_val: U16<Little> = U16::from(0x1234u16);
+        let big_val: u16_be = u16_be::from_native(0x1234);
+        let little_val: u16_le = u16_le::from_native(0x1234);
 
         // Both should convert back to the same native value
         assert_eq!(big_val.to_native(), 0x1234);
@@ -138,28 +141,28 @@ mod tests {
     #[test]
     fn test_basic_integer_types() {
         // Test U8
-        let u8_val: U8<Big> = U8::from(255u8);
+        let u8_val: u8_be = u8_be::from_native(255);
         assert_eq!(u8_val.to_native(), 255);
 
         // Test U16
-        let u16_val: U16<Little> = U16::from(65535u16);
+        let u16_val: u16_le = u16_le::from_native(65535);
         assert_eq!(u16_val.to_native(), 65535);
 
         // Test U64
-        let u64_val: U64<Big> = U64::from(0xFFFFFFFFFFFFFFFFu64);
+        let u64_val: u64_be = u64_be::from_native(0xFFFFFFFFFFFFFFFF);
         assert_eq!(u64_val.to_native(), 0xFFFFFFFFFFFFFFFF);
 
         // Test signed types
-        let i8_val: I8<Little> = I8::from(-128i8);
+        let i8_val: i8_le = i8_le::from_native(-128);
         assert_eq!(i8_val.to_native(), -128);
 
-        let i16_val: I16<Big> = I16::from(-32768i16);
+        let i16_val: i16_be = i16_be::from_native(-32768);
         assert_eq!(i16_val.to_native(), -32768);
 
-        let i32_val: I32<Little> = I32::from(-2147483648i32);
+        let i32_val: i32_le = i32_le::from_native(-2147483648);
         assert_eq!(i32_val.to_native(), -2147483648);
 
-        let i64_val: I64<Big> = I64::from(-9223372036854775808i64);
+        let i64_val: i64_be = i64_be::from_native(-9223372036854775808);
         assert_eq!(i64_val.to_native(), -9223372036854775808);
     }
 }
