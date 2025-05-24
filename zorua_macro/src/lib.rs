@@ -207,7 +207,7 @@ fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
 
 /// On top of implementing the ZoruaFallible trait, this derive macro
 /// also includes a [TryInto]`<Self>` impl for [Fallible]`<Self, B>`.
-#[proc_macro_derive(ZoruaFallible, attributes(targets))]
+#[proc_macro_derive(ZoruaFallible, attributes(target_byte, target_bit))]
 pub fn zoruafallible_derive_macro(item: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(item).unwrap(); //parse
     match &ast.data {
@@ -217,19 +217,32 @@ pub fn zoruafallible_derive_macro(item: TokenStream) -> TokenStream {
 }
 
 fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
-    let mut targets: Option<Vec<Type>> = None;
+    let mut target_bytes: Vec<Type> = Vec::new();
+    let mut target_bits: Vec<Type> = Vec::new();
     let repr: Type;
 
     for attr in &ast.attrs {
-        if attr.path().is_ident("targets") {
+        if attr.path().is_ident("target_byte") {
             let data = syn::punctuated::Punctuated::<syn::Type, syn::Token![,]>::parse_terminated
                 .parse2(attr.parse_args().expect(
-                    "The `targets` attribute must contain a list of target types for ZoruaFallible, e.g. #[targets(u3, u8)]",
+                    "The `target_byte` attribute must contain a list of BackingField types, e.g. #[target_byte(u8, u16_le)]",
                 ))
                 .unwrap();
 
             if !data.is_empty() {
-                targets = Some(Vec::from_iter(data));
+                target_bytes.extend(data);
+            }
+        }
+
+        if attr.path().is_ident("target_bit") {
+            let data = syn::punctuated::Punctuated::<syn::Type, syn::Token![,]>::parse_terminated
+                .parse2(attr.parse_args().expect(
+                    "The `target_bit` attribute must contain a list of BackingBitField types, e.g. #[target_bit(u3, u7)]",
+                ))
+                .unwrap();
+
+            if !data.is_empty() {
+                target_bits.extend(data);
             }
         }
     }
@@ -243,54 +256,77 @@ fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         panic!("The enum must have either the u8 or u16 repr")
     }
 
-    match targets {
-        None => panic!("You must include at least 1 target type for the ZoruaFallible trait"),
-        Some(targets) => {
-            let ident = ast.ident.clone();
-            let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
-            let mut final_ts = quote! {};
-
-            for ty in targets {
-                //generate is_valid || arms
-                let mut is_valid_impl = quote! {};
-                for variant in &data.variants {
-                    if !variant.fields.is_empty() {
-                        panic!("ZoruaFallible only supports c-like enums (i.e. no fields).")
-                    }
-                    let variant_ident = &variant.ident;
-                    is_valid_impl.extend(quote! {
-                        || (backed_val == #ident::#variant_ident as <#ty as BackingBitField>::ByteRepr)
-                    });
-                }
-
-                final_ts.extend(quote! {
-                    unsafe impl #impl_generics ZoruaFallible<#ty> for #ident #type_generics #where_clause {
-                        fn is_valid(value: #ty) -> bool {
-                            let backed_val = <#ty as BackingBitField>::to_backed(value);
-                            false #is_valid_impl
-                        }
-                    }
-                    impl TryInto<#ident> for Fallible<#ident, #ty> {
-                        type Error = #ty;
-                        fn try_into(self) -> Result<#ident, #ty> {
-                            if #ident::is_valid(self.value) {
-                                let backed_value = <#ty as BackingBitField>::to_backed(self.value);
-                                // SAFETY:
-                                // 1) We have already ensured this is a c-like enum
-                                // 2) We just checked that this is a valid value
-                                // 3) The `as #repr` ensures that the backed_value is
-                                // same shape as the discriminant
-                                Ok(unsafe { core::mem::transmute(backed_value as #repr) })
-                            } else {
-                                Err(self.value)
-                            }
-                        }
-                    }
-                });
-            }
-            final_ts.into()
-        }
+    if target_bytes.is_empty() && target_bits.is_empty() {
+        panic!(
+            "You must include at least 1 target type using either #[target_byte] or #[target_bit]"
+        );
     }
+
+    let ident = ast.ident.clone();
+    let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
+    let mut final_ts = quote! {};
+
+    // Process BackingField types (target_byte)
+    for ty in target_bytes {
+        // Generate variant checks for try_into
+        let mut variant_checks = quote! {};
+        for variant in &data.variants {
+            if !variant.fields.is_empty() {
+                panic!("ZoruaFallible only supports c-like enums (i.e. no fields).")
+            }
+            let variant_ident = &variant.ident;
+            variant_checks.extend(quote! {
+                if value == <#ty>::from(#ident::#variant_ident as #repr) {
+                    return Ok(#ident::#variant_ident);
+                }
+            });
+        }
+
+        final_ts.extend(quote! {
+            unsafe impl #impl_generics ZoruaFallible<#ty> for #ident #type_generics #where_clause {}
+
+            impl TryInto<#ident> for Fallible<#ident, #ty> {
+                type Error = #ty;
+                fn try_into(self) -> Result<#ident, #ty> {
+                    let value = self.value;
+                    #variant_checks
+                    Err(self.value)
+                }
+            }
+        });
+    }
+
+    // Process BackingBitField types (target_bit)
+    for ty in target_bits {
+        // Generate variant checks for try_into
+        let mut variant_checks = quote! {};
+        for variant in &data.variants {
+            if !variant.fields.is_empty() {
+                panic!("ZoruaFallible only supports c-like enums (i.e. no fields).")
+            }
+            let variant_ident = &variant.ident;
+            variant_checks.extend(quote! {
+                if backed_val == (#ident::#variant_ident as <#ty as BackingBitField>::ByteRepr) {
+                    return Ok(#ident::#variant_ident);
+                }
+            });
+        }
+
+        final_ts.extend(quote! {
+            unsafe impl #impl_generics ZoruaFallible<#ty> for #ident #type_generics #where_clause {}
+
+            impl TryInto<#ident> for Fallible<#ident, #ty> {
+                type Error = #ty;
+                fn try_into(self) -> Result<#ident, #ty> {
+                    let backed_val = <#ty as BackingBitField>::to_backed(self.value);
+                    #variant_checks
+                    Err(self.value)
+                }
+            }
+        });
+    }
+
+    final_ts.into()
 }
 
 // --------------
