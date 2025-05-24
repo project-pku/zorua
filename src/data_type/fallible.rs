@@ -1,5 +1,6 @@
+use core::{convert::TryInto, marker::PhantomData, mem};
+
 use crate::traits::{BackingBitField, BackingField, ZoruaBitField, ZoruaField};
-use core::{marker::PhantomData, mem};
 
 /// A wrapper type for enums that may have invalid discriminant values.
 ///
@@ -39,6 +40,16 @@ impl<T: ZoruaFallible<B>, B> Fallible<T, B> {
             _marker: Default::default(),
             value,
         }
+    }
+
+    /// Attempts to convert this `Fallible` into the target enum type `T`.
+    /// Returns `Ok(T)` if the value corresponds to a valid variant,
+    /// or `Err(B)` with the raw backing value if not.
+    pub fn into_result(self) -> Result<T, B>
+    where
+        Self: TryInto<T, Error = B>,
+    {
+        self.try_into()
     }
 }
 
