@@ -6,7 +6,7 @@ To use `zorua` add the following dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-zorua = { git = "https://github.com/project-pku/zorua.git", tag="v0.7" }
+zorua = { git = "https://github.com/project-pku/zorua.git", tag="v0.8" }
 ```
 
 > [!WARNING]  
@@ -18,7 +18,7 @@ zorua = { git = "https://github.com/project-pku/zorua.git", tag="v0.7" }
 ## Features
 To use the crate simply import the `prelude` module.
 
-The `zorua` crate was created to enable the following features safely, and within a [zero-copy](https://en.wikipedia.org/wiki/Zero-copy) context:
+The `zorua` crate was created to enable the following features safely, and within a [zero-copy](https://en.wikipedia.org/wiki/Zero-copy) and endian-aware context:
 
 - [Transmutation](#transmutation)
 - [Bitfields](#bitfields)
@@ -62,7 +62,7 @@ use zorua::prelude::*;
 struct MyStruct {
     field_a: u8,
     field_b: u8,
-    field_c: u16,
+    field_c: u16_le,
 }
 
 // Same size and alignment as MyStruct
@@ -70,15 +70,15 @@ struct MyStruct {
 #[repr(C)]
 #[derive(ZoruaField, Clone)]
 struct MyStruct2 {
-    field_1: u16,
-    field_2: u16,
+    field_1: u16_le,
+    field_2: u16_le,
 }
 
 fn main() {
     let myStruct = MyStruct {
         field_a: 0,
         field_b: 2,
-        field_c: 5,
+        field_c: 5u16.into(),
     };
 
     // Transmute to another ZoruaField of w/ compatible layout
@@ -93,6 +93,9 @@ fn main() {
 ```
 
 > [!NOTE]
+> Built-in primitives like `u16` do not implement `ZoruaField` because their internal repsentation is different on different architectures. The `u16_le` should be used instead because it is always stored in little-endian format. There are equivalents for `u32`, and `u64`, for both little-endian and big-endian.
+
+> [!NOTE]
 > The `aligned_bytes_of!(T)` macro simply returns `AlignedBytes<{mem::align_of::<T>()}, {mem::size_of::<T>()}>`. It is useful for type annotations.
 
 ### Bitfields
@@ -103,8 +106,8 @@ bitfields! {
     #[repr(C)]
     #[derive(ZoruaField)]
     pub struct MyStruct {
-        pub field_a: u16,
-        field_b: u16, // Backing field (no `pub` so only bitfields are exposed)
+        pub field_a: u16_be,
+        field_b: u16_be, // Backing field (no `pub` so only bitfields are exposed)
         |pub bitfield_a: u5@0, // 5 bit uint @ index 0
         |pub bitfield_b: bool@5, // 1 bit bool @ index 5
         |bitfield_c: u7@6, // Bitfields can be private too
@@ -114,8 +117,8 @@ bitfields! {
 
 fn main() {
     let myStruct = MyStruct {
-        field_a: 12,
-        field_b: 367, //0b000-0000101-1-01111
+        field_a: 12u16.into(),
+        field_b: 367u16.into(), //0b000-0000101-1-01111
     }
 
     println!("{:#b}", myStruct.bitfield_a()); // "0b01111"
@@ -127,7 +130,7 @@ fn main() {
 
 #### Declaring a bitfield
 ```
-field_b: u16, <------------ Backing field: field_b
+field_b: u16_le, <------------ Backing field: field_b
 |pub bitfield_a: bool@0,
 |pub bitfield_b: u5@1,
  ^   ^           ^  ^
@@ -143,7 +146,7 @@ Only certain types can be used as bitfield types in the `bitfield!` macro.
 
 **`uX` Types**
 
-Importing `zorua::prelude::*` makes the types `u1`-`u15` available. These types are exactly what they seem, they are unsigned integers of varying bitsizes. Just like with the built-in `uX`'s, if a type is smaller than the data trying to be fit into it (e.g. `u16` into a `u12`), a `try_into()` is required instead of an `into()`.
+Importing `zorua::prelude::*` makes the types `u1`-`u15` available. These types are exactly what they seem, they are unsigned integers of varying bitsizes. Just like with the built-in `uX`'s, if a type can potentially over/underflow during conversion (e.g. `u14` into a `u12`), a `try_into()` is required instead of an `into()`.
 
 **Custom Bitfields**
 
@@ -185,7 +188,8 @@ This is great, but its unlikely that all your enums will have *exactly* 2^n vari
 ```rust
 #[repr(u8)]
 #[derive(ZoruaFallible)]
-#[targets(u8, u2)]
+#[target_byte(u8)] //For use in fields. Can be u8, u16_le, u64_be, etc. 
+#[target_bit(u2)] //For use in bitfields. Can be u1, u2, u12, etc.
 enum MyEnum {
     Variant0,
     Variant1,
@@ -218,6 +222,6 @@ fn main() {
 
 ```
 
-Note that a `Fallible` type can be used either as a `ZoruaField` or `ZoruaBitField` depending on the given target (e.g. targets of `u8`, `u16`, etc. can be used as both fields and bitfields, while `u2`, `u12`, etc. can only be used as bitfields).
+Note that a `Fallible` type can be used either as a `ZoruaField` or `ZoruaBitField` depending on the given target.
 
-Also note that while `ZoruaFallible` can be derived for enums, you can manually implement it for structs as well.
+Also note that while `ZoruaFallible` can be derived for enums, you can manually implement it for structs as well (although you must ensure the safety conditions are met).
