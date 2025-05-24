@@ -54,6 +54,9 @@ fn impl_zoruafield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStream {
         panic!("The `unsafe_no_padding` attribute can only be used with generic structs.")
     }
 
+    // Generate field validation checks
+    let field_checks = generate_field_checks(&data.fields);
+
     generate_impl(
         "ZoruaField",
         true,
@@ -61,9 +64,13 @@ fn impl_zoruafield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStream {
         None,
         //NOTE: Allow packed structs to skip the padding check?
         if no_generics {
-            Some(generate_assert_no_padding(ast))
+            let padding_check = generate_assert_no_padding(ast);
+            Some(quote! {
+                #field_checks
+                #padding_check
+            })
         } else {
-            None
+            Some(field_checks)
         },
     )
 }
@@ -409,4 +416,28 @@ fn generate_assert_no_padding(input: &DeriveInput) -> proc_macro2::TokenStream {
             let _ = ::core::mem::transmute::<#struct_type, [u8; #size_sum]>;
         };
     }
+}
+
+fn generate_field_checks(fields: &Fields) -> proc_macro2::TokenStream {
+    let mut field_checks = quote! {};
+
+    for (i, field) in fields.iter().enumerate() {
+        let ty = &field.ty;
+        let const_name = syn::Ident::new(
+            &format!("_ZORUA_FIELD_CHECK_{i}"),
+            proc_macro2::Span::call_site(),
+        );
+
+        // Generate a compile-time assertion that the field implements ZoruaField
+        field_checks.extend(quote! {
+            #[doc(hidden)]
+            const #const_name: fn() = || {
+                // This will fail to compile if the field type doesn't implement ZoruaField
+                fn assert_zorua_field<T: ZoruaField>() {}
+                assert_zorua_field::<#ty>();
+            };
+        });
+    }
+
+    field_checks
 }
