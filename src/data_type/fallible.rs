@@ -20,15 +20,11 @@ pub struct Fallible<T: ZoruaFallible<B>, B> {
 /// - `B` should implement at least one of [BackingField] or [BackingBitField].
 /// - The generic type `B` must have the same size (but not necessarily
 ///   [alignment](https://doc.rust-lang.org/std/mem/fn.transmute_copy.html)) as `Self`.
-/// - The [ZoruaFallible::is_valid()] function must be properly implemented. That is to say,
-///   it should return false for every instance of `B` that is invalid when transmuted to `Self`.
 ///
 /// The [derive macro](zorua_macro::zoruafallible_derive_macro) for this trait ensures all of
 /// these requirements, and also implements [TryInto]`<Self>` for [Fallible]`<Self, B>`,
 /// so you should prefer using that.
-pub unsafe trait ZoruaFallible<B> {
-    fn is_valid(value: B) -> bool;
-}
+pub unsafe trait ZoruaFallible<B> {}
 
 impl<T: ZoruaFallible<B>, B> Fallible<T, B> {
     pub fn from_value(value: T) -> Fallible<T, B> {

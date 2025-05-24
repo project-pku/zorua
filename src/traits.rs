@@ -5,35 +5,43 @@ use crate::{aligned_bytes_of, data_type::*};
 pub use zorua_macro::*;
 
 /// Automates boilerplate for implementing ZoruaField
-/// and BackingField on built-in int types
-macro_rules! impl_backing {
-    ($($ty:ty),*) => {
+/// and BackingField on endian-aware int types
+macro_rules! impl_backing_endian {
+    ($(($ty_e:tt, $ty:ty)),*) => {
         $(
-            impl BackingField for $ty {
+            impl<E: Endian> BackingField for $ty_e<E> {
+                type Primitive = $ty;
+
                 fn get_bits_at<T: BackingBitField>(self, index: usize) -> T
                 where Self: From<T::ByteRepr> + TryInto<T::ByteRepr> {
+                    let masked_value = (self.to_native()
+                        & (Self::from(T::MASK).to_native() << index)) >> index;
                     T::from_backed(
-                        ((self & (Into::<$ty>::into(T::MASK) << index)) >> index).try_into().unwrap_or_else(
+                        Self::from_native(masked_value).try_into().unwrap_or_else(
                             |_| {
                                 panic!("Zorua Error: The BitRepr::MASK of type {} must be wrong",
-                                    core::any::type_name::<$ty>())
+                                    core::any::type_name::<$ty_e<E>>())
                             }
                         )
                     )
                 }
                 fn set_bits_at<T: BackingBitField>(&mut self, value: T, index: usize)
                 where Self: From<T::ByteRepr> + TryInto<T::ByteRepr> {
-                    *self &= !(Into::<$ty>::into(T::MASK) << index);
-                    *self |= (Into::<$ty>::into(value.to_backed())) << index;
+                    let mut native = self.to_native();
+                    let mask_native = Self::from(T::MASK).to_native();
+                    let value_native = Self::from(value.to_backed()).to_native();
+                    native &= !(mask_native << index);
+                    native |= value_native << index;
+                    *self = Self::from_native(native);
                 }
             }
-            unsafe impl ZoruaField for $ty {}
+            unsafe impl<E: Endian> ZoruaField for $ty_e<E> {}
         )*
     };
 }
 
 /// Automates boilerplate for implementing ZoruaBitField
-/// and BackingBitField on arbitrary-int & built-in int types
+/// and BackingBitField on arbitrary-int & endian-aware int types
 macro_rules! impl_bit_backing {
     ("arbitrary", $backing:ty, $($ty:ty),*) => {
         $(
@@ -94,6 +102,7 @@ pub const fn compatible_layout<T, U>() -> bool {
 /// # Safety
 /// This trait is safe to implement *iff*:
 /// - `Self` a *POD*, which is to say any possible bit pattern produces a valid instance of it.
+/// - The representation of `Self` is independent of the endianness of the system.
 pub unsafe trait ZoruaField: Sized {
     fn as_bytes(&self) -> &[u8] {
         let slf: *const Self = self;
@@ -198,6 +207,8 @@ where
 ///
 /// (Practically speaking, just the built-in uints.)
 pub trait BackingField: ZoruaField + Copy + core::fmt::Debug + PartialEq {
+    type Primitive;
+
     fn get_bits_at<T: BackingBitField>(self, index: usize) -> T
     where
         Self: From<T::ByteRepr> + TryInto<T::ByteRepr>;
@@ -207,7 +218,35 @@ pub trait BackingField: ZoruaField + Copy + core::fmt::Debug + PartialEq {
         Self: From<T::ByteRepr> + TryInto<T::ByteRepr>;
 }
 
-impl_backing!(u8, u16, u32, u64, u128);
+impl BackingField for u8 {
+    type Primitive = u8;
+
+    fn get_bits_at<T: BackingBitField>(self, index: usize) -> T
+    where
+        Self: From<T::ByteRepr> + TryInto<T::ByteRepr>,
+    {
+        T::from_backed(
+            ((self & (Self::from(T::MASK) << index)) >> index)
+                .try_into()
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "Zorua Error: The BitRepr::MASK of type {} must be wrong",
+                        core::any::type_name::<u8>()
+                    )
+                }),
+        )
+    }
+    fn set_bits_at<T: BackingBitField>(&mut self, value: T, index: usize)
+    where
+        Self: From<T::ByteRepr> + TryInto<T::ByteRepr>,
+    {
+        *self &= !(Self::from(T::MASK) << index);
+        *self |= Self::from(value.to_backed()) << index;
+    }
+}
+unsafe impl ZoruaField for u8 {}
+
+impl_backing_endian!((U16, u16), (U32, u32), (U64, u64));
 
 unsafe impl ZoruaField for () {}
 
@@ -233,7 +272,7 @@ pub trait ZoruaBitField {
 }
 
 pub trait BackingBitField: ZoruaBitField + Copy {
-    type ByteRepr: BackingField;
+    type ByteRepr; //Smallest primitive int that can represent this type
     const MASK: Self::ByteRepr;
     fn to_backed(self) -> Self::ByteRepr;
     fn from_backed(value: Self::ByteRepr) -> Self;
@@ -241,7 +280,7 @@ pub trait BackingBitField: ZoruaBitField + Copy {
 
 impl_bit_backing!("arbitrary", u8, u1, u2, u3, u4, u5, u6, u7);
 impl_bit_backing!("arbitrary", u16, u9, u10, u11, u12, u13, u14, u15);
-impl_bit_backing!("native", u8, u16, u32, u64, u128);
+impl_bit_backing!("native", u8, u16, u32, u64);
 
 impl ZoruaBitField for bool {
     type BitRepr = u1;
