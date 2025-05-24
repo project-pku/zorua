@@ -267,8 +267,8 @@ fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
     let mut final_ts = quote! {};
 
     // Process BackingField types (target_byte)
-    for ty in target_bytes {
-        // Generate variant checks for try_into
+    for (idx, ty) in target_bytes.into_iter().enumerate() {
+        // Generate variant checks for this specific type
         let mut variant_checks = quote! {};
         for variant in &data.variants {
             if !variant.fields.is_empty() {
@@ -282,23 +282,38 @@ fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
             });
         }
 
+        // Create a type-specific helper function
+        let helper_fn_name = syn::Ident::new(
+            &format!(
+                "__zorua_try_from_byte_{}_for_{}",
+                idx,
+                ident.to_string().to_lowercase()
+            ),
+            ident.span(),
+        );
+
         final_ts.extend(quote! {
+            #[doc(hidden)]
+            #[inline(always)]
+            fn #helper_fn_name(value: #ty) -> Result<#ident, #ty> {
+                #variant_checks
+                Err(value)
+            }
+
             unsafe impl #impl_generics ZoruaFallible<#ty> for #ident #type_generics #where_clause {}
 
             impl TryInto<#ident> for Fallible<#ident, #ty> {
                 type Error = #ty;
                 fn try_into(self) -> Result<#ident, #ty> {
-                    let value = self.value;
-                    #variant_checks
-                    Err(self.value)
+                    #helper_fn_name(self.value)
                 }
             }
         });
     }
 
     // Process BackingBitField types (target_bit)
-    for ty in target_bits {
-        // Generate variant checks for try_into
+    for (idx, ty) in target_bits.into_iter().enumerate() {
+        // Generate variant checks for this specific type
         let mut variant_checks = quote! {};
         for variant in &data.variants {
             if !variant.fields.is_empty() {
@@ -312,15 +327,31 @@ fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
             });
         }
 
+        // Create a type-specific helper function
+        let helper_fn_name = syn::Ident::new(
+            &format!(
+                "__zorua_try_from_bit_{}_for_{}",
+                idx,
+                ident.to_string().to_lowercase()
+            ),
+            ident.span(),
+        );
+
         final_ts.extend(quote! {
+            #[doc(hidden)]
+            #[inline(always)]
+            fn #helper_fn_name(value: #ty) -> Result<#ident, #ty> {
+                let backed_val = <#ty as BackingBitField>::to_backed(value);
+                #variant_checks
+                Err(value)
+            }
+
             unsafe impl #impl_generics ZoruaFallible<#ty> for #ident #type_generics #where_clause {}
 
             impl TryInto<#ident> for Fallible<#ident, #ty> {
                 type Error = #ty;
                 fn try_into(self) -> Result<#ident, #ty> {
-                    let backed_val = <#ty as BackingBitField>::to_backed(self.value);
-                    #variant_checks
-                    Err(self.value)
+                    #helper_fn_name(self.value)
                 }
             }
         });
