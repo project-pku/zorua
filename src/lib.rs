@@ -69,13 +69,16 @@ pub mod prelude {
     /// alignment as the input type. For example:
     ///
     /// ```
+    /// use std::any::TypeId;
+    /// use zorua::prelude::*;
+    ///
     /// //ALIGN = 2, SIZE = 4
     /// struct MyStruct {
     ///     a: u16,
     ///     b: u16,
     /// }
     /// assert_eq!(
-    ///     TypeId::of::<AlignedBytes<2, 4>>>(),
+    ///     TypeId::of::<AlignedBytes<2, 4>>(),
     ///     TypeId::of::<aligned_bytes_of!(MyStruct)>()
     /// ); //passes
     /// ```

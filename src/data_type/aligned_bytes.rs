@@ -86,6 +86,8 @@ where
     ///
     /// Usage:
     /// ```
+    /// use zorua::prelude::*;
+    ///
     /// let x = AlignedBytes::<4, 20>::new();
     /// let y: AlignedBytes<2, 20> = x.weaken_alignment::<2>();
     /// ```
