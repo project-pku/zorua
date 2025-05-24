@@ -51,7 +51,7 @@ macro_rules! impl_shift_ops {
                 type Output = Self;
 
                 fn shl(self, rhs: usize) -> Self::Output {
-                    <Self as From<$primitive>>::from(self.to_native() << rhs)
+                    <Self as From<$primitive>>::from(self.value() << rhs)
                 }
             }
 
@@ -59,7 +59,7 @@ macro_rules! impl_shift_ops {
                 type Output = Self;
 
                 fn shr(self, rhs: usize) -> Self::Output {
-                    <Self as From<$primitive>>::from(self.to_native() >> rhs)
+                    <Self as From<$primitive>>::from(self.value() >> rhs)
                 }
             }
         )*
@@ -79,7 +79,7 @@ macro_rules! impl_bitwise_ops {
                 type Output = Self;
 
                 fn bitand(self, rhs: Self) -> Self::Output {
-                    <Self as From<$primitive>>::from(self.to_native() & rhs.to_native())
+                    <Self as From<$primitive>>::from(self.value() & rhs.value())
                 }
             }
 
@@ -87,7 +87,7 @@ macro_rules! impl_bitwise_ops {
                 type Output = Self;
 
                 fn bitor(self, rhs: Self) -> Self::Output {
-                    <Self as From<$primitive>>::from(self.to_native() | rhs.to_native())
+                    <Self as From<$primitive>>::from(self.value() | rhs.value())
                 }
             }
 
@@ -95,7 +95,7 @@ macro_rules! impl_bitwise_ops {
                 type Output = Self;
 
                 fn bitxor(self, rhs: Self) -> Self::Output {
-                    <Self as From<$primitive>>::from(self.to_native() ^ rhs.to_native())
+                    <Self as From<$primitive>>::from(self.value() ^ rhs.value())
                 }
             }
 
@@ -103,25 +103,25 @@ macro_rules! impl_bitwise_ops {
                 type Output = Self;
 
                 fn not(self) -> Self::Output {
-                    <Self as From<$primitive>>::from(!self.to_native())
+                    <Self as From<$primitive>>::from(!self.value())
                 }
             }
 
             impl<E: Endian> BitAndAssign for $t<E> {
                 fn bitand_assign(&mut self, rhs: Self) {
-                    *self = <Self as From<$primitive>>::from(self.to_native() & rhs.to_native());
+                    *self = <Self as From<$primitive>>::from(self.value() & rhs.value());
                 }
             }
 
             impl<E: Endian> BitOrAssign for $t<E> {
                 fn bitor_assign(&mut self, rhs: Self) {
-                    *self = <Self as From<$primitive>>::from(self.to_native() | rhs.to_native());
+                    *self = <Self as From<$primitive>>::from(self.value() | rhs.value());
                 }
             }
 
             impl<E: Endian> BitXorAssign for $t<E> {
                 fn bitxor_assign(&mut self, rhs: Self) {
-                    *self = <Self as From<$primitive>>::from(self.to_native() ^ rhs.to_native());
+                    *self = <Self as From<$primitive>>::from(self.value() ^ rhs.value());
                 }
             }
         )*
@@ -179,57 +179,57 @@ macro_rules! impl_prim_int {
         $(
             impl<E: Endian> PrimInt for $t<E> {
                 fn count_ones(self) -> u32 {
-                    self.to_native().count_ones()
+                    self.value().count_ones()
                 }
 
                 fn count_zeros(self) -> u32 {
-                    self.to_native().count_zeros()
+                    self.value().count_zeros()
                 }
 
                 fn leading_zeros(self) -> u32 {
-                    self.to_native().leading_zeros()
+                    self.value().leading_zeros()
                 }
 
                 fn trailing_zeros(self) -> u32 {
-                    self.to_native().trailing_zeros()
+                    self.value().trailing_zeros()
                 }
 
                 fn rotate_left(self, n: u32) -> Self {
-                    <Self as From<$primitive>>::from(self.to_native().rotate_left(n))
+                    <Self as From<$primitive>>::from(self.value().rotate_left(n))
                 }
 
                 fn rotate_right(self, n: u32) -> Self {
-                    <Self as From<$primitive>>::from(self.to_native().rotate_right(n))
+                    <Self as From<$primitive>>::from(self.value().rotate_right(n))
                 }
 
                 fn signed_shl(self, n: u32) -> Self {
-                    <Self as From<$primitive>>::from(self.to_native() << n)
+                    <Self as From<$primitive>>::from(self.value() << n)
                 }
 
                 fn signed_shr(self, n: u32) -> Self {
-                    <Self as From<$primitive>>::from((<$primitive as PrimInt>::signed_shr(self.to_native(), n)))
+                    <Self as From<$primitive>>::from((<$primitive as PrimInt>::signed_shr(self.value(), n)))
                 }
 
                 fn unsigned_shl(self, n: u32) -> Self {
-                    <Self as From<$primitive>>::from(self.to_native() << n)
+                    <Self as From<$primitive>>::from(self.value() << n)
                 }
 
                 fn unsigned_shr(self, n: u32) -> Self {
-                    <Self as From<$primitive>>::from(self.to_native() >> n)
+                    <Self as From<$primitive>>::from(self.value() >> n)
                 }
 
                 fn swap_bytes(self) -> Self {
-                    <Self as From<$primitive>>::from(self.to_native().swap_bytes())
+                    <Self as From<$primitive>>::from(self.value().swap_bytes())
                 }
 
                 fn from_be(x: Self) -> Self {
                     // Convert from big-endian to current endianness
                     let native = if E::IS_BIG_ENDIAN {
                         // If we're already big-endian, just return the value
-                        x.to_native()
+                        x.value()
                     } else {
                         // Convert from big-endian to little-endian
-                        <$primitive>::from_be(x.to_native())
+                        <$primitive>::from_be(x.value())
                     };
                     <Self as From<$primitive>>::from(native)
                 }
@@ -238,10 +238,10 @@ macro_rules! impl_prim_int {
                     // Convert from little-endian to current endianness
                     let native = if E::IS_BIG_ENDIAN {
                         // Convert from little-endian to big-endian
-                        <$primitive>::from_le(x.to_native())
+                        <$primitive>::from_le(x.value())
                     } else {
                         // If we're already little-endian, just return the value
-                        x.to_native()
+                        x.value()
                     };
                     <Self as From<$primitive>>::from(native)
                 }
@@ -250,10 +250,10 @@ macro_rules! impl_prim_int {
                     // Convert from current endianness to big-endian
                     let native = if E::IS_BIG_ENDIAN {
                         // Already big-endian, just return native value
-                        self.to_native()
+                        self.value()
                     } else {
                         // Convert to big-endian
-                        self.to_native().to_be()
+                        self.value().to_be()
                     };
                     <Self as From<$primitive>>::from(native)
                 }
@@ -262,16 +262,16 @@ macro_rules! impl_prim_int {
                     // Convert from current endianness to little-endian
                     let native = if E::IS_BIG_ENDIAN {
                         // Convert to little-endian
-                        self.to_native().to_le()
+                        self.value().to_le()
                     } else {
                         // Already little-endian, just return native value
-                        self.to_native()
+                        self.value()
                     };
                     <Self as From<$primitive>>::from(native)
                 }
 
                 fn pow(self, exp: u32) -> Self {
-                    <Self as From<$primitive>>::from(self.to_native().pow(exp))
+                    <Self as From<$primitive>>::from(self.value().pow(exp))
                 }
             }
         )*
@@ -291,11 +291,11 @@ macro_rules! impl_to_from_bytes {
                 type Bytes = [u8; std::mem::size_of::<$primitive>()];
 
                 fn to_be_bytes(&self) -> Self::Bytes {
-                    self.to_native().to_be_bytes()
+                    self.value().to_be_bytes()
                 }
 
                 fn to_le_bytes(&self) -> Self::Bytes {
-                    self.to_native().to_le_bytes()
+                    self.value().to_le_bytes()
                 }
             }
 
@@ -328,7 +328,7 @@ macro_rules! impl_binop {
                 type Output = Self;
 
                 fn $method(self, rhs: Self) -> Self::Output {
-                    <Self as From<$primitive>>::from(self.to_native().$method(rhs.to_native()))
+                    <Self as From<$primitive>>::from(self.value().$method(rhs.value()))
                 }
             }
 
@@ -336,7 +336,7 @@ macro_rules! impl_binop {
                 type Output = Self;
 
                 fn $method(self, rhs: &$t<E>) -> Self::Output {
-                    <Self as From<$primitive>>::from(self.to_native().$method(rhs.to_native()))
+                    <Self as From<$primitive>>::from(self.value().$method(rhs.value()))
                 }
             }
 
@@ -344,7 +344,7 @@ macro_rules! impl_binop {
                 type Output = $t<E>;
 
                 fn $method(self, rhs: $t<E>) -> Self::Output {
-                    <$t<E> as From<$primitive>>::from(self.to_native().$method(rhs.to_native()))
+                    <$t<E> as From<$primitive>>::from(self.value().$method(rhs.value()))
                 }
             }
 
@@ -352,19 +352,19 @@ macro_rules! impl_binop {
                 type Output = $t<E>;
 
                 fn $method(self, rhs: &$t<E>) -> Self::Output {
-                    <$t<E> as From<$primitive>>::from(self.to_native().$method(rhs.to_native()))
+                    <$t<E> as From<$primitive>>::from(self.value().$method(rhs.value()))
                 }
             }
 
             impl<E: Endian> $assign_trait for $t<E> {
                 fn $assign_method(&mut self, rhs: Self) {
-                    *self = <Self as From<$primitive>>::from(self.to_native().$method(rhs.to_native()));
+                    *self = <Self as From<$primitive>>::from(self.value().$method(rhs.value()));
                 }
             }
 
             impl<E: Endian> $assign_trait<&$t<E>> for $t<E> {
                 fn $assign_method(&mut self, rhs: &Self) {
-                    *self = <Self as From<$primitive>>::from(self.to_native().$method(rhs.to_native()));
+                    *self = <Self as From<$primitive>>::from(self.value().$method(rhs.value()));
                 }
             }
         )*
@@ -407,7 +407,7 @@ macro_rules! impl_zero_one {
                 }
 
                 fn is_zero(&self) -> bool {
-                    self.to_native().is_zero()
+                    self.value().is_zero()
                 }
             }
 
@@ -418,11 +418,11 @@ macro_rules! impl_zero_one {
             }
 
             impl<E: Endian> ConstZero for $t<E> {
-                const ZERO: Self = Self::from_native(<$primitive>::ZERO);
+                const ZERO: Self = Self::new(<$primitive>::ZERO);
             }
 
             impl<E: Endian> ConstOne for $t<E> {
-                const ONE: Self = Self::from_native(<$primitive>::ONE);
+                const ONE: Self = Self::new(<$primitive>::ONE);
             }
         )*
     };
@@ -439,7 +439,7 @@ macro_rules! impl_display {
         $(
             impl<E: Endian> Display for $t<E> {
                 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    Display::fmt(&self.to_native(), f)
+                    Display::fmt(&self.value(), f)
                 }
             }
         )*
@@ -477,43 +477,43 @@ macro_rules! impl_to_primitive {
         $(
             impl<E: Endian> ToPrimitive for $t<E> {
                 fn to_i64(&self) -> Option<i64> {
-                    self.to_native().to_i64()
+                    self.value().to_i64()
                 }
 
                 fn to_u64(&self) -> Option<u64> {
-                    self.to_native().to_u64()
+                    self.value().to_u64()
                 }
 
                 fn to_i32(&self) -> Option<i32> {
-                    self.to_native().to_i32()
+                    self.value().to_i32()
                 }
 
                 fn to_u32(&self) -> Option<u32> {
-                    self.to_native().to_u32()
+                    self.value().to_u32()
                 }
 
                 fn to_i16(&self) -> Option<i16> {
-                    self.to_native().to_i16()
+                    self.value().to_i16()
                 }
 
                 fn to_u16(&self) -> Option<u16> {
-                    self.to_native().to_u16()
+                    self.value().to_u16()
                 }
 
                 fn to_i8(&self) -> Option<i8> {
-                    self.to_native().to_i8()
+                    self.value().to_i8()
                 }
 
                 fn to_u8(&self) -> Option<u8> {
-                    self.to_native().to_u8()
+                    self.value().to_u8()
                 }
 
                 fn to_f32(&self) -> Option<f32> {
-                    self.to_native().to_f32()
+                    self.value().to_f32()
                 }
 
                 fn to_f64(&self) -> Option<f64> {
-                    self.to_native().to_f64()
+                    self.value().to_f64()
                 }
             }
         )*
@@ -585,25 +585,25 @@ macro_rules! impl_checked_ops {
         $(
             impl<E: Endian> CheckedAdd for $t<E> {
                 fn checked_add(&self, v: &Self) -> Option<Self> {
-                    self.to_native().checked_add(v.to_native()).map(<Self as From<$primitive>>::from)
+                    self.value().checked_add(v.value()).map(<Self as From<$primitive>>::from)
                 }
             }
 
             impl<E: Endian> CheckedSub for $t<E> {
                 fn checked_sub(&self, v: &Self) -> Option<Self> {
-                    self.to_native().checked_sub(v.to_native()).map(<Self as From<$primitive>>::from)
+                    self.value().checked_sub(v.value()).map(<Self as From<$primitive>>::from)
                 }
             }
 
             impl<E: Endian> CheckedMul for $t<E> {
                 fn checked_mul(&self, v: &Self) -> Option<Self> {
-                    self.to_native().checked_mul(v.to_native()).map(<Self as From<$primitive>>::from)
+                    self.value().checked_mul(v.value()).map(<Self as From<$primitive>>::from)
                 }
             }
 
             impl<E: Endian> CheckedDiv for $t<E> {
                 fn checked_div(&self, v: &Self) -> Option<Self> {
-                    self.to_native().checked_div(v.to_native()).map(<Self as From<$primitive>>::from)
+                    self.value().checked_div(v.value()).map(<Self as From<$primitive>>::from)
                 }
             }
         )*
@@ -621,11 +621,11 @@ macro_rules! impl_saturating {
         $(
             impl<E: Endian> Saturating for $t<E> {
                 fn saturating_add(self, v: Self) -> Self {
-                    <Self as From<$primitive>>::from(self.to_native().saturating_add(v.to_native()))
+                    <Self as From<$primitive>>::from(self.value().saturating_add(v.value()))
                 }
 
                 fn saturating_sub(self, v: Self) -> Self {
-                    <Self as From<$primitive>>::from(self.to_native().saturating_sub(v.to_native()))
+                    <Self as From<$primitive>>::from(self.value().saturating_sub(v.value()))
                 }
             }
         )*
@@ -643,19 +643,19 @@ macro_rules! impl_wrapping_ops {
         $(
             impl<E: Endian> WrappingAdd for $t<E> {
                 fn wrapping_add(&self, v: &Self) -> Self {
-                    <Self as From<$primitive>>::from(self.to_native().wrapping_add(v.to_native()))
+                    <Self as From<$primitive>>::from(self.value().wrapping_add(v.value()))
                 }
             }
 
             impl<E: Endian> WrappingSub for $t<E> {
                 fn wrapping_sub(&self, v: &Self) -> Self {
-                    <Self as From<$primitive>>::from(self.to_native().wrapping_sub(v.to_native()))
+                    <Self as From<$primitive>>::from(self.value().wrapping_sub(v.value()))
                 }
             }
 
             impl<E: Endian> WrappingMul for $t<E> {
                 fn wrapping_mul(&self, v: &Self) -> Self {
-                    <Self as From<$primitive>>::from(self.to_native().wrapping_mul(v.to_native()))
+                    <Self as From<$primitive>>::from(self.value().wrapping_mul(v.value()))
                 }
             }
         )*
