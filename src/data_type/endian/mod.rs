@@ -6,20 +6,16 @@
 //! # Examples
 //!
 //! ```
-//! use zorua::prelude::{U16, U32, U64, Big, Little};
+//! use zorua::prelude::*;
 //!
 //! // Create a big-endian u32
 //! let be_value: U32<Big> = U32::from(0x12345678u32);
 //!
 //! // Create a little-endian u64 from a smaller type
-//! let le_value: U64<Little> = U64::from(42u16);
+//! let le_value: u64_le = u64_le::from(42u16); // alias for U64<Little>
 //!
 //! // Convert back to native representation
 //! let native_value = be_value.to_native();
-//!
-//! // Create from byte array using num_traits
-//! use num_traits::FromBytes;
-//! let value: U16<Big> = FromBytes::from_be_bytes(&[0x12, 0x34]);
 //! ```
 
 mod aliases;
