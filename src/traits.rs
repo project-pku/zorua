@@ -14,10 +14,10 @@ macro_rules! impl_backing_endian {
 
                 fn get_bits_at<T: BackingBitField>(self, index: usize) -> T
                 where Self: From<T::ByteRepr> + TryInto<T::ByteRepr> {
-                    let masked_value = (self.to_native()
-                        & (Self::from(T::MASK).to_native() << index)) >> index;
+                    let masked_value = (self.value()
+                        & (Self::from(T::MASK).value() << index)) >> index;
                     T::from_backed(
-                        Self::from_native(masked_value).try_into().unwrap_or_else(
+                        Self::new(masked_value).try_into().unwrap_or_else(
                             |_| {
                                 panic!("Zorua Error: The BitRepr::MASK of type {} must be wrong",
                                     core::any::type_name::<$ty_e<E>>())
@@ -27,12 +27,12 @@ macro_rules! impl_backing_endian {
                 }
                 fn set_bits_at<T: BackingBitField>(&mut self, value: T, index: usize)
                 where Self: From<T::ByteRepr> + TryInto<T::ByteRepr> {
-                    let mut native = self.to_native();
-                    let mask_native = Self::from(T::MASK).to_native();
-                    let value_native = Self::from(value.to_backed()).to_native();
+                    let mut native = self.value();
+                    let mask_native = Self::from(T::MASK).value();
+                    let value_native = Self::from(value.to_backed()).value();
                     native &= !(mask_native << index);
                     native |= value_native << index;
-                    *self = Self::from_native(native);
+                    *self = Self::new(native);
                 }
             }
             unsafe impl<E: Endian> ZoruaField for $ty_e<E> {}

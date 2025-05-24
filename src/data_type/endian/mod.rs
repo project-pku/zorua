@@ -15,7 +15,7 @@
 //! let le_value: u64_le = u64_le::from(42u16); // alias for U64<Little>
 //!
 //! // Convert back to native representation
-//! let native_value = be_value.to_native();
+//! let native_value = be_value.value();
 //! ```
 
 mod aliases;
@@ -61,7 +61,7 @@ macro_rules! define_endian_int {
         }
 
         impl<E: Endian> $name<E> {
-            pub const fn from_native(value: $primitive) -> Self {
+            pub const fn new(value: $primitive) -> Self {
                 let bytes = if E::IS_BIG_ENDIAN {
                     value.to_be_bytes()
                 } else {
@@ -73,7 +73,7 @@ macro_rules! define_endian_int {
                 }
             }
 
-            pub const fn to_native(&self) -> $primitive {
+            pub const fn value(&self) -> $primitive {
                 if E::IS_BIG_ENDIAN {
                     <$primitive>::from_be_bytes(self.bytes)
                 } else {
@@ -85,7 +85,7 @@ macro_rules! define_endian_int {
         // From implementation for the primitive type
         impl<E: Endian> From<$primitive> for $name<E> {
             fn from(value: $primitive) -> Self {
-                Self::from_native(value)
+                Self::new(value)
             }
         }
     };
@@ -111,22 +111,22 @@ mod tests {
     fn test_u32_endian() {
         // Big-endian roundtrip
         let big_endian_value: u32_be = u32_be::from(0x12345678u32);
-        assert_eq!(big_endian_value.to_native(), 0x12345678);
+        assert_eq!(big_endian_value.value(), 0x12345678);
 
         // Little-endian roundtrip
         let little_endian_value: u32_le = u32_le::from(0x12345678u32);
-        assert_eq!(little_endian_value.to_native(), 0x12345678);
+        assert_eq!(little_endian_value.value(), 0x12345678);
     }
 
     #[test]
     fn test_endian_behavior() {
         // Test that big and little-endian actually store bytes differently
-        let big_val: u16_be = u16_be::from_native(0x1234);
-        let little_val: u16_le = u16_le::from_native(0x1234);
+        let big_val: u16_be = u16_be::new(0x1234);
+        let little_val: u16_le = u16_le::new(0x1234);
 
         // Both should convert back to the same native value
-        assert_eq!(big_val.to_native(), 0x1234);
-        assert_eq!(little_val.to_native(), 0x1234);
+        assert_eq!(big_val.value(), 0x1234);
+        assert_eq!(little_val.value(), 0x1234);
 
         // But their byte representations should be different - let's transmute the U16s to [u8; 2] and compare
         let big_bytes: [u8; 2] = unsafe { std::mem::transmute(big_val) };
@@ -137,28 +137,28 @@ mod tests {
     #[test]
     fn test_basic_integer_types() {
         // Test U8
-        let u8_val: u8_be = u8_be::from_native(255);
-        assert_eq!(u8_val.to_native(), 255);
+        let u8_val: u8_be = u8_be::new(255);
+        assert_eq!(u8_val.value(), 255);
 
         // Test U16
-        let u16_val: u16_le = u16_le::from_native(65535);
-        assert_eq!(u16_val.to_native(), 65535);
+        let u16_val: u16_le = u16_le::new(65535);
+        assert_eq!(u16_val.value(), 65535);
 
         // Test U64
-        let u64_val: u64_be = u64_be::from_native(0xFFFFFFFFFFFFFFFF);
-        assert_eq!(u64_val.to_native(), 0xFFFFFFFFFFFFFFFF);
+        let u64_val: u64_be = u64_be::new(0xFFFFFFFFFFFFFFFF);
+        assert_eq!(u64_val.value(), 0xFFFFFFFFFFFFFFFF);
 
         // Test signed types
-        let i8_val: i8_le = i8_le::from_native(-128);
-        assert_eq!(i8_val.to_native(), -128);
+        let i8_val: i8_le = i8_le::new(-128);
+        assert_eq!(i8_val.value(), -128);
 
-        let i16_val: i16_be = i16_be::from_native(-32768);
-        assert_eq!(i16_val.to_native(), -32768);
+        let i16_val: i16_be = i16_be::new(-32768);
+        assert_eq!(i16_val.value(), -32768);
 
-        let i32_val: i32_le = i32_le::from_native(-2147483648);
-        assert_eq!(i32_val.to_native(), -2147483648);
+        let i32_val: i32_le = i32_le::new(-2147483648);
+        assert_eq!(i32_val.value(), -2147483648);
 
-        let i64_val: i64_be = i64_be::from_native(-9223372036854775808);
-        assert_eq!(i64_val.to_native(), -9223372036854775808);
+        let i64_val: i64_be = i64_be::new(-9223372036854775808);
+        assert_eq!(i64_val.value(), -9223372036854775808);
     }
 }

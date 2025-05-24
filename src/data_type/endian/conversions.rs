@@ -44,7 +44,7 @@ macro_rules! impl_from_endian_to_primitive {
     ($endian_type:ident, $primitive:ty) => {
         impl<E: Endian> From<$endian_type<E>> for $primitive {
             fn from(value: $endian_type<E>) -> Self {
-                value.to_native()
+                value.value()
             }
         }
     };
@@ -57,7 +57,7 @@ macro_rules! impl_try_from_endian_to_smaller {
             type Error = std::num::TryFromIntError;
 
             fn try_from(value: $endian_type<E>) -> Result<Self, Self::Error> {
-                <$to_primitive>::try_from(value.to_native())
+                <$to_primitive>::try_from(value.value())
             }
         }
     };
