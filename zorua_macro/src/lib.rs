@@ -21,20 +21,25 @@ use syn::{
 #[proc_macro_derive(ZoruaField, attributes(unsafe_confirm_no_padding))]
 pub fn zoruafield_derive_macro(item: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(item).unwrap(); //parse
-    match &ast.data {
+    let result = match &ast.data {
         Data::Struct(data) => impl_zoruafield_struct(&ast, data),
         Data::Enum(data) => impl_zoruafield_enum(&ast, data),
-        _ => panic!("This macro is only defined for structs & enums"),
-    } //generate
+        _ => Err(syn::Error::new_spanned(
+            &ast,
+            "ZoruaField can only be derived for structs and enums",
+        )),
+    };
+    result.unwrap_or_else(|e| e.into_compile_error().into())
 }
 
-fn impl_zoruafield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStream {
+fn impl_zoruafield_struct(ast: &DeriveInput, data: &DataStruct) -> Result<TokenStream, syn::Error> {
     //Ensure composite structs are repr C (otherwise size, alignment, and order are undefined)
-    if (data.fields.len() > 1) && !get_repr_state(&ast.attrs).repr_c {
-        panic!(
-            "Composite structs must have the C repr to derive ZoruaField\n\
-            Try adding `#[repr(C)]` to the struct"
-        )
+    if (data.fields.len() > 1) && !get_repr_state(&ast.attrs)?.repr_c {
+        return Err(syn::Error::new_spanned(
+            &ast.ident,
+            "Composite structs must have the C repr to derive ZoruaField. \
+            Try adding `#[repr(C)]` to the struct.",
+        ));
     }
 
     let no_generics = ast.generics.params.is_empty();
@@ -45,19 +50,24 @@ fn impl_zoruafield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStream {
         .any(|attr| attr.path().is_ident("unsafe_confirm_no_padding"));
 
     if !no_generics && !unsafe_confirm_no_padding {
-        panic!(
-            "You must manually verify that the generic structs has no padding due to its layout. You can confirm this by adding the `unsafe_no_padding` attribute."
-        )
+        return Err(syn::Error::new_spanned(
+            &ast.generics,
+            "Generic structs require manual verification that no padding exists due to layout. \
+            Confirm this by adding the `#[unsafe_confirm_no_padding]` attribute.",
+        ));
     }
 
     if no_generics && unsafe_confirm_no_padding {
-        panic!("The `unsafe_no_padding` attribute can only be used with generic structs.")
+        return Err(syn::Error::new_spanned(
+            &ast.ident,
+            "The `#[unsafe_confirm_no_padding]` attribute can only be used with generic structs.",
+        ));
     }
 
     // Generate field validation checks
     let field_checks = generate_field_checks(&data.fields);
 
-    generate_impl(
+    Ok(generate_impl(
         "ZoruaField",
         true,
         ast,
@@ -72,48 +82,66 @@ fn impl_zoruafield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStream {
         } else {
             Some(field_checks)
         },
-    )
+    ))
 }
 
-fn impl_zoruafield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
+fn impl_zoruafield_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, syn::Error> {
     //These two conditions ensure enum is a POD
-    if !get_repr_state(&ast.attrs).repr_u8 {
-        panic!(
-            "Enums must have the u8 repr to derive ZoruaField\n\
-            Try adding `#[repr(u8)]` to the struct"
-        )
+    if !get_repr_state(&ast.attrs)?.repr_u8 {
+        return Err(syn::Error::new_spanned(
+            &ast.ident,
+            "Enums must have the u8 repr to derive ZoruaField. \
+            Try adding `#[repr(u8)]` to the enum.",
+        ));
     }
     if data.variants.len() != 256 {
-        panic!(
-            "Enums must have 256 variants to derive ZoruaField.\n\
-            Did you mean to derive ZoruaBitField or ZoruaFallible?"
-        )
+        return Err(syn::Error::new_spanned(
+            &ast.ident,
+            format!(
+                "Enums must have exactly 256 variants to derive ZoruaField (found {}). \
+                Did you mean to derive ZoruaBitField or ZoruaFallible?",
+                data.variants.len()
+            ),
+        ));
     }
 
-    generate_impl("ZoruaField", true, ast, None, None)
+    Ok(generate_impl("ZoruaField", true, ast, None, None))
 }
 
 #[proc_macro_derive(ZoruaBitField)]
 pub fn zoruabitfield_derive_macro(item: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(item).unwrap(); //parse
-    match &ast.data {
+    let result = match &ast.data {
         Data::Struct(data) => impl_zoruabitfield_struct(&ast, data),
         Data::Enum(data) => impl_zoruabitfield_enum(&ast, data),
-        _ => panic!("This macro only supports enums and newtype structs"),
-    } //generate
+        _ => Err(syn::Error::new_spanned(
+            &ast,
+            "ZoruaBitField can only be derived for enums and newtype structs",
+        )),
+    };
+    result.unwrap_or_else(|e| e.into_compile_error().into())
 }
 
-fn impl_zoruabitfield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStream {
+fn impl_zoruabitfield_struct(
+    ast: &DeriveInput,
+    data: &DataStruct,
+) -> Result<TokenStream, syn::Error> {
     if data.fields.len() != 1 {
-        panic!("Only structs with one field can derive ZoruaBitField")
+        return Err(syn::Error::new_spanned(
+            &ast.ident,
+            "Only structs with exactly one field can derive ZoruaBitField",
+        ));
     }
     let field0 = data.fields.iter().collect::<Vec<&syn::Field>>()[0];
     if field0.ident.is_some() {
-        panic!("Only tuple structs can derive ZoruaBitField")
+        return Err(syn::Error::new_spanned(
+            field0,
+            "Only tuple structs can derive ZoruaBitField (use `struct Name(Type)` syntax)",
+        ));
     }
     let wrapped_ty = &field0.ty;
 
-    generate_impl(
+    Ok(generate_impl(
         "ZoruaBitField",
         false,
         ast,
@@ -127,12 +155,16 @@ fn impl_zoruabitfield_struct(ast: &DeriveInput, data: &DataStruct) -> TokenStrea
             }
         }),
         None,
-    )
+    ))
 }
 
-fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
-    if !get_repr_state(&ast.attrs).repr_u8 {
-        panic!("The enum must have the u8 repr, i.e. #[repr(u8)]")
+fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, syn::Error> {
+    if !get_repr_state(&ast.attrs)?.repr_u8 {
+        return Err(syn::Error::new_spanned(
+            &ast.ident,
+            "The enum must have the u8 repr to derive ZoruaBitField. \
+            Try adding `#[repr(u8)]` to the enum.",
+        ));
     }
 
     let num_variants = data.variants.len();
@@ -145,7 +177,15 @@ fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         64 => parse_str("u6").unwrap(),
         128 => parse_str("u7").unwrap(),
         256 => parse_str("u8").unwrap(),
-        _ => panic!("The number of variants must equal a power of 2, from 2^1 to 2^8."),
+        _ => {
+            return Err(syn::Error::new_spanned(
+                &ast.ident,
+                format!(
+                    "The number of variants must be a power of 2 from 2^1 to 2^8 (found {}).",
+                    num_variants
+                ),
+            ));
+        }
     };
 
     //check if every val from 0-2^n is accounted for
@@ -153,12 +193,18 @@ fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
     let mut current = 0;
     for variant in &data.variants {
         if !variant.fields.is_empty() {
-            panic!("Enum must be c-like (i.e. no fields)")
+            return Err(syn::Error::new_spanned(
+                variant,
+                "Enum must be c-like (variants cannot have fields)",
+            ));
         }
         match &variant.discriminant {
             None => {
                 if current >= num_variants {
-                    panic!("The discriminants should cover every value from 0 to 2^n-1")
+                    return Err(syn::Error::new_spanned(
+                        variant,
+                        "The discriminants must cover every value from 0 to 2^n-1",
+                    ));
                 }
                 exists_vec[current] = true;
                 current += 1;
@@ -166,26 +212,45 @@ fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
             Some((_, expr)) => match expr {
                 Expr::Lit(expr) => match &expr.lit {
                     Lit::Int(lit) => {
-                        current = lit
-                            .base10_parse()
-                            .expect("Enum discriminants must be expressed in base 10");
+                        current = lit.base10_parse().map_err(|_| {
+                            syn::Error::new_spanned(
+                                lit,
+                                "Enum discriminants must be expressed in base 10",
+                            )
+                        })?;
                         if current >= num_variants {
-                            panic!("The discriminants should cover every value from 0 to 2^n-1")
+                            return Err(syn::Error::new_spanned(
+                                variant,
+                                "The discriminants must cover every value from 0 to 2^n-1",
+                            ));
                         }
                         exists_vec[current] = true;
                         current += 1;
                     }
-                    _ => panic!("Invalid enum discriminant!"),
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            &expr.lit,
+                            "Invalid enum discriminant: expected integer literal",
+                        ));
+                    }
                 },
-                _ => panic!("Invalid enum discriminant!"),
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        expr,
+                        "Invalid enum discriminant: expected literal expression",
+                    ));
+                }
             },
         }
     }
     if !exists_vec.iter().all(|value| *value) {
-        panic!("The discriminants should cover every value from 0 to 2^n-1")
+        return Err(syn::Error::new_spanned(
+            &ast.ident,
+            "The discriminants must cover every value from 0 to 2^n-1 without gaps",
+        ));
     }
 
-    generate_impl(
+    Ok(generate_impl(
         "ZoruaBitField",
         false,
         ast,
@@ -202,7 +267,7 @@ fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
             }
         }),
         None,
-    )
+    ))
 }
 
 /// On top of implementing the ZoruaFallible trait, this derive macro
@@ -210,24 +275,32 @@ fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
 #[proc_macro_derive(ZoruaFallible, attributes(target_byte, target_bit))]
 pub fn zoruafallible_derive_macro(item: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(item).unwrap(); //parse
-    match &ast.data {
+    let result = match &ast.data {
         Data::Enum(data) => impl_zoruafallible_enum(&ast, data),
-        _ => panic!("ZoruaFallible is only available for enums"),
-    } //generate
+        _ => Err(syn::Error::new_spanned(
+            &ast,
+            "ZoruaFallible can only be derived for enums",
+        )),
+    };
+    result.unwrap_or_else(|e| e.into_compile_error().into())
 }
 
-fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
+fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, syn::Error> {
     let mut target_bytes: Vec<Type> = Vec::new();
     let mut target_bits: Vec<Type> = Vec::new();
     let repr: Type;
 
     for attr in &ast.attrs {
         if attr.path().is_ident("target_byte") {
+            let args: proc_macro2::TokenStream = attr.parse_args().map_err(|_| {
+                syn::Error::new_spanned(
+                    attr,
+                    "The `target_byte` attribute must contain a list of BackingField types, \
+                    e.g. #[target_byte(u8, u16_le)]",
+                )
+            })?;
             let data = syn::punctuated::Punctuated::<syn::Type, syn::Token![,]>::parse_terminated
-                .parse2(attr.parse_args().expect(
-                    "The `target_byte` attribute must contain a list of BackingField types, e.g. #[target_byte(u8, u16_le)]",
-                ))
-                .unwrap();
+                .parse2(args)?;
 
             if !data.is_empty() {
                 target_bytes.extend(data);
@@ -235,11 +308,15 @@ fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         }
 
         if attr.path().is_ident("target_bit") {
+            let args: proc_macro2::TokenStream = attr.parse_args().map_err(|_| {
+                syn::Error::new_spanned(
+                    attr,
+                    "The `target_bit` attribute must contain a list of BackingBitField types, \
+                    e.g. #[target_bit(u3, u7)]",
+                )
+            })?;
             let data = syn::punctuated::Punctuated::<syn::Type, syn::Token![,]>::parse_terminated
-                .parse2(attr.parse_args().expect(
-                    "The `target_bit` attribute must contain a list of BackingBitField types, e.g. #[target_bit(u3, u7)]",
-                ))
-                .unwrap();
+                .parse2(args)?;
 
             if !data.is_empty() {
                 target_bits.extend(data);
@@ -247,19 +324,24 @@ fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         }
     }
 
-    let repr_state = get_repr_state(&ast.attrs);
+    let repr_state = get_repr_state(&ast.attrs)?;
     if repr_state.repr_u16 {
         repr = syn::parse_str("u16").unwrap();
     } else if repr_state.repr_u8 {
         repr = syn::parse_str("u8").unwrap();
     } else {
-        panic!("The enum must have either the u8 or u16 repr")
+        return Err(syn::Error::new_spanned(
+            &ast.ident,
+            "The enum must have either the u8 or u16 repr. \
+            Try adding `#[repr(u8)]` or `#[repr(u16)]` to the enum.",
+        ));
     }
 
     if target_bytes.is_empty() && target_bits.is_empty() {
-        panic!(
-            "You must include at least 1 target type using either #[target_byte] or #[target_bit]"
-        );
+        return Err(syn::Error::new_spanned(
+            &ast.ident,
+            "You must include at least 1 target type using either #[target_byte] or #[target_bit]",
+        ));
     }
 
     let ident = ast.ident.clone();
@@ -272,7 +354,10 @@ fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         let mut variant_checks = quote! {};
         for variant in &data.variants {
             if !variant.fields.is_empty() {
-                panic!("ZoruaFallible only supports c-like enums (i.e. no fields).")
+                return Err(syn::Error::new_spanned(
+                    variant,
+                    "ZoruaFallible only supports c-like enums (variants cannot have fields)",
+                ));
             }
             let variant_ident = &variant.ident;
             variant_checks.extend(quote! {
@@ -317,7 +402,10 @@ fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         let mut variant_checks = quote! {};
         for variant in &data.variants {
             if !variant.fields.is_empty() {
-                panic!("ZoruaFallible only supports c-like enums (i.e. no fields).")
+                return Err(syn::Error::new_spanned(
+                    variant,
+                    "ZoruaFallible only supports c-like enums (variants cannot have fields)",
+                ));
             }
             let variant_ident = &variant.ident;
             variant_checks.extend(quote! {
@@ -357,7 +445,7 @@ fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
         });
     }
 
-    final_ts.into()
+    Ok(final_ts.into())
 }
 
 // --------------
@@ -394,14 +482,14 @@ struct ReprState {
     repr_packed: Option<usize>,
 }
 
-fn get_repr_state(attrs: &[Attribute]) -> ReprState {
+fn get_repr_state(attrs: &[Attribute]) -> Result<ReprState, syn::Error> {
     let mut repr_c = false;
     let mut repr_u8 = false;
     let mut repr_u16 = false;
     let mut repr_packed = None::<usize>;
     for attr in attrs {
         if attr.path().is_ident("repr") {
-            let res = attr.parse_nested_meta(|meta| {
+            attr.parse_nested_meta(|meta| {
                 // #[repr(C)]
                 if meta.path.is_ident("C") {
                     repr_c = true;
@@ -435,37 +523,38 @@ fn get_repr_state(attrs: &[Attribute]) -> ReprState {
                 }
 
                 Ok(()) //ignore unparsed reprs
-            });
-            if let Err(e) = res {
-                panic!("zorua crate failed to parse repr attribute: {e}");
-            }
+            })?;
         }
     }
 
-    ReprState {
+    Ok(ReprState {
         repr_c,
         repr_u8,
         repr_u16,
         repr_packed,
-    }
+    })
 }
 
 fn get_field_types(fields: &Fields) -> impl Iterator<Item = &'_ Type> {
     fields.iter().map(|field| &field.ty)
 }
 
-fn get_fields(input: &DeriveInput) -> Fields {
+fn get_fields(input: &DeriveInput) -> Result<Fields, syn::Error> {
     match &input.data {
-        Data::Struct(DataStruct { fields, .. }) => fields.clone(),
-        Data::Union(DataUnion { fields, .. }) => Fields::Named(fields.clone()),
-        Data::Enum(_) => panic!("Enums are not supported"),
+        Data::Struct(DataStruct { fields, .. }) => Ok(fields.clone()),
+        Data::Union(DataUnion { fields, .. }) => Ok(Fields::Named(fields.clone())),
+        Data::Enum(_) => Err(syn::Error::new_spanned(
+            input,
+            "get_fields does not support enums",
+        )),
     }
 }
 
 fn generate_assert_no_padding(input: &DeriveInput) -> proc_macro2::TokenStream {
     let struct_type = &input.ident;
     let span = input.ident.span();
-    let fields = get_fields(input);
+    // Note: get_fields won't fail here since we only call this for structs
+    let fields = get_fields(input).unwrap();
 
     let mut field_types = get_field_types(&fields);
     let size_sum = if let Some(first) = field_types.next() {
