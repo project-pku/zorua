@@ -9,9 +9,6 @@ To use `zorua` add the following dependency to your `Cargo.toml`:
 zorua = { git = "https://github.com/project-pku/zorua.git", tag="v0.8" }
 ```
 
-> [!WARNING]  
-> This crate currently uses **nightly**!
-
 > [!NOTE]
 > zorua supports `no_std` environments by disabling the default `std` feature.
 
@@ -84,7 +81,7 @@ fn main() {
 
     // Get a reference as aligned bytes
     let bytes_ref: &aligned_bytes_of!(MyStruct) = myStruct2.transmute_ref();
-
+    
     // Or access raw bytes directly
     let raw_bytes: &[u8] = myStruct2.as_bytes();
 }
