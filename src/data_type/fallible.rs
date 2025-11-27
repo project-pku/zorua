@@ -5,7 +5,8 @@ use crate::traits::{BackingBitField, BackingField, ZoruaBitField, ZoruaField};
 /// A wrapper type for enums that may have invalid discriminant values.
 ///
 /// Used when reading data that might contain values outside the enum's valid range.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(C)]
 pub struct Fallible<T: ZoruaFallible<B>, B> {
     _marker: PhantomData<T>,
     pub value: B,
