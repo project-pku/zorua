@@ -42,16 +42,11 @@ The `ZoruaField` trait provides multiple transmutation methods:
 > [!NOTE]
 > These methods can only be used if the target type has the same size and an equal or lower alignment as the source type. We call this condition having a **compatible layout**, and these methods validate it at compile time.
 
-The `ZoruaField` trait also provides convinience methods for transmuting structs into aligned bytes specifically:
-- `into_aligned_bytes()` - Convert to AlignedBytes
-- `as_aligned_bytes()` - Get a reference to the data as AlignedBytes
-- `as_aligned_bytes_mut()` - Get a mutable reference to the data as AlignedBytes
-
-> [!NOTE]
-> The `AlignedBytes<ALIGN, SIZE>` type is an array of bytes of size `SIZE` with an alignment `ALIGN` known at compile time.
 The trait also provides raw byte access:
 - `as_bytes()` - Get a byte slice view of the data
 - `as_bytes_mut()` - Get a mutable byte slice view of the data
+
+For aligned byte buffers, you can transmute to `AlignedBytes<ALIGN, SIZE>` - an array of bytes with size `SIZE` and alignment `ALIGN` known at compile time. The `aligned_bytes_of!(T)` macro provides a convenient way to get an `AlignedBytes` type matching any struct's layout.
 
 
 ```rust
@@ -85,18 +80,18 @@ fn main() {
     let myStruct2: MyStruct2 = myStruct.transmute();
 
     // Convert to aligned bytes
-    let bytes = myStruct2.clone().into_aligned_bytes();
-    
-    // Or use the transmutation fn instead
-    let bytes: aligned_bytes_of!(MyStruct) = myStruct2.transmute();
+    let bytes: aligned_bytes_of!(MyStruct) = myStruct2.clone().transmute();
+
+    // Get a reference as aligned bytes
+    let bytes_ref: &aligned_bytes_of!(MyStruct) = myStruct2.transmute_ref();
+
+    // Or access raw bytes directly
+    let raw_bytes: &[u8] = myStruct2.as_bytes();
 }
 ```
 
 > [!NOTE]
-> Built-in primitives like `u16` do not implement `ZoruaField` because their internal repsentation is different on different architectures. The `u16_le` should be used instead because it is always stored in little-endian format. There are equivalents for `u32`, and `u64`, for both little-endian and big-endian.
-
-> [!NOTE]
-> The `aligned_bytes_of!(T)` macro simply returns `AlignedBytes<{mem::align_of::<T>()}, {mem::size_of::<T>()}>`. It is useful for type annotations.
+> Built-in primitives like `u16` do not implement `ZoruaField` because their internal representation is different on different architectures. Use `u16_le` instead, which is always stored in little-endian format. There are equivalents for `u32` and `u64`, for both little-endian and big-endian.
 
 ### Bitfields
 The `zorua` crate also supports adding virtual *bitfields* to your structs:

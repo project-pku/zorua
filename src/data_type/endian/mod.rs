@@ -56,9 +56,11 @@ macro_rules! define_endian_int {
         #[repr(transparent)]
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name<E: Endian> {
-            bytes: [u8; std::mem::size_of::<$primitive>()],
+            bytes: [u8; core::mem::size_of::<$primitive>()],
             _endian: PhantomData<E>,
         }
+
+        unsafe impl<E: Endian> $crate::traits::ZoruaField for $name<E> {}
 
         impl<E: Endian> $name<E> {
             pub const fn new(value: $primitive) -> Self {

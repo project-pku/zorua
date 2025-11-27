@@ -1,15 +1,10 @@
-use core::{
-    mem,
-    ops::{Deref, DerefMut},
-};
+use core::ops::{Deref, DerefMut};
+
 use elain::{Align, Alignment};
-
-use crate::traits::ZoruaField;
-
-pub type AlignOf<T> = Align<{ mem::align_of::<T>() }>;
 
 /// A smart pointer for a length `N` array that guarantees an alignment of `ALIGN`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
 pub struct AlignedBytes<const ALIGN: usize, const N: usize>
 where
     Align<ALIGN>: Alignment,
@@ -18,11 +13,21 @@ where
     value: [u8; N],
 }
 
-unsafe impl<const ALIGN: usize, const N: usize> ZoruaField for AlignedBytes<ALIGN, N>
+// Manual ZoruaField impl with compile-time padding check
+unsafe impl<const ALIGN: usize, const N: usize> crate::traits::ZoruaField for AlignedBytes<ALIGN, N> where
+    Align<ALIGN>: Alignment
+{
+}
+
+// Compile-time check that alignment divides size (no padding issues)
+const fn _check_aligned_bytes<const ALIGN: usize, const N: usize>()
 where
     Align<ALIGN>: Alignment,
-    [(); (N % ALIGN == 0) as usize - 1]: Sized,
 {
+    assert!(
+        N.is_multiple_of(ALIGN) || N == 0,
+        "AlignedBytes size must be divisible by alignment"
+    );
 }
 
 impl<const ALIGN: usize, const N: usize> AlignedBytes<ALIGN, N>
@@ -56,29 +61,36 @@ where
         }
     }
 
-    pub fn chunk<const CHUNK_SIZE: usize>(self) -> [AlignedBytes<ALIGN, CHUNK_SIZE>; N / CHUNK_SIZE]
-    where
-        [(); (N % CHUNK_SIZE == 0) as usize - 1]: Sized,
-    {
-        unsafe { crate::unconditional_transmute(self) }
+    /// Returns an iterator over fixed-size chunks of this buffer.
+    ///
+    /// Compile-time checks that N is evenly divisible by CHUNK_SIZE.
+    pub fn array_chunks<const CHUNK_SIZE: usize>(&self) -> impl Iterator<Item = &[u8; CHUNK_SIZE]> {
+        const {
+            assert!(
+                N.is_multiple_of(CHUNK_SIZE),
+                "buffer size must be divisible by chunk size"
+            )
+        };
+        self.value
+            .chunks_exact(CHUNK_SIZE)
+            .map(|s| s.try_into().unwrap())
     }
 
-    pub fn chunk_ref<const CHUNK_SIZE: usize>(
-        &self,
-    ) -> &[AlignedBytes<ALIGN, CHUNK_SIZE>; N / CHUNK_SIZE]
-    where
-        [(); (N % CHUNK_SIZE == 0) as usize - 1]: Sized,
-    {
-        unsafe { mem::transmute(self) }
-    }
-
-    pub fn chunk_mut<const CHUNK_SIZE: usize>(
+    /// Returns a mutable iterator over fixed-size chunks of this buffer.
+    ///
+    /// Compile-time checks that N is evenly divisible by CHUNK_SIZE.
+    pub fn array_chunks_mut<const CHUNK_SIZE: usize>(
         &mut self,
-    ) -> &mut [AlignedBytes<ALIGN, CHUNK_SIZE>; N / CHUNK_SIZE]
-    where
-        [(); (N % CHUNK_SIZE == 0) as usize - 1]: Sized,
-    {
-        unsafe { mem::transmute(self) }
+    ) -> impl Iterator<Item = &mut [u8; CHUNK_SIZE]> {
+        const {
+            assert!(
+                N.is_multiple_of(CHUNK_SIZE),
+                "buffer size must be divisible by chunk size"
+            )
+        };
+        self.value
+            .chunks_exact_mut(CHUNK_SIZE)
+            .map(|s| s.try_into().unwrap())
     }
 
     /// Transmutes an [`AlignedBytes`] type into another `AlignedBytes`
@@ -98,9 +110,17 @@ where
     pub fn weaken_alignment<const NEW_ALIGN: usize>(self) -> AlignedBytes<NEW_ALIGN, N>
     where
         Align<NEW_ALIGN>: Alignment,
-        [(); (ALIGN >= NEW_ALIGN) as usize - 1]:,
     {
-        unsafe { crate::unconditional_transmute(self) }
+        const {
+            assert!(
+                ALIGN >= NEW_ALIGN,
+                "new alignment must be <= current alignment"
+            )
+        };
+        AlignedBytes {
+            _alignment: [],
+            value: self.value,
+        }
     }
 }
 

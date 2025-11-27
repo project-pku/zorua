@@ -1,6 +1,6 @@
 use core::mem;
 
-use crate::{aligned_bytes_of, data_type::*};
+use crate::data_type::*;
 
 pub use zorua_macro::*;
 
@@ -35,7 +35,6 @@ macro_rules! impl_backing_endian {
                     *self = Self::new(native);
                 }
             }
-            unsafe impl<E: Endian> ZoruaField for $ty_e<E> {}
         )*
     };
 }
@@ -52,7 +51,7 @@ macro_rules! impl_bit_backing {
             }
             impl BackingBitField for $ty {
                 type ByteRepr = $backing;
-                const MASK: Self::ByteRepr = unsafe { core::mem::transmute(<$ty>::MAX) };
+                const MASK: Self::ByteRepr = (1 << <$ty>::BITS) - 1;
                 fn to_backed(self) -> Self::ByteRepr {
                     self.into()
                 }
@@ -95,8 +94,20 @@ const _: () = assert!(
     "This crate can only be compiled on little or big endian systems"
 );
 
-pub const fn compatible_layout<T, U>() -> bool {
-    mem::size_of::<T>() == mem::size_of::<U>() && mem::align_of::<T>() >= mem::align_of::<U>()
+/// Compile-time assertion that `A` can be safely transmuted to `B`.
+///
+/// Checks:
+/// - Sizes are equal
+/// - Alignment of `A` is >= alignment of `B`
+const fn assert_transmute_compatible<A, B>() {
+    assert!(
+        mem::size_of::<A>() == mem::size_of::<B>(),
+        "transmute: size mismatch"
+    );
+    assert!(
+        mem::align_of::<A>() >= mem::align_of::<B>(),
+        "transmute: alignment mismatch"
+    );
 }
 
 /// # Safety
@@ -114,44 +125,38 @@ pub unsafe trait ZoruaField: Sized {
         unsafe { core::slice::from_raw_parts_mut(slf.cast::<u8>(), mem::size_of::<Self>()) }
     }
 
-    /// Transmutes a [`ZoruaField`] into another with a [`compatible_layout`].
-    fn transmute<T: ZoruaField>(self) -> T
-    where
-        [(); compatible_layout::<Self, T>() as usize - 1]:,
-    {
-        unsafe { crate::unconditional_transmute(self) }
-    }
-
-    #[cfg(feature = "std")]
-    fn box_transmute<T: ZoruaField>(self: Box<Self>) -> Box<T>
-    where
-        [(); compatible_layout::<Self, T>() as usize - 1]:,
-    {
+    /// Transmutes a [`ZoruaField`] into another with a compatible layout.
+    fn transmute<T: ZoruaField>(self) -> T {
+        const { assert_transmute_compatible::<Self, T>() };
+        // SAFETY: Layout compatibility verified by const assertion above
         unsafe {
-            let foo_ptr: *mut Self = Box::into_raw(self);
-            let bar_ptr: *mut T = foo_ptr as *mut T;
-            Box::from_raw(bar_ptr)
+            let result = core::ptr::read(&self as *const Self as *const T);
+            core::mem::forget(self);
+            result
         }
     }
 
-    fn transmute_ref<T: ZoruaField>(&self) -> &T
-    where
-        [(); compatible_layout::<Self, T>() as usize - 1]:,
-    {
+    #[cfg(feature = "std")]
+    fn box_transmute<T: ZoruaField>(self: Box<Self>) -> Box<T> {
+        const { assert_transmute_compatible::<Self, T>() };
+        unsafe {
+            let raw_ptr: *mut Self = Box::into_raw(self);
+            Box::from_raw(raw_ptr as *mut T)
+        }
+    }
+
+    fn transmute_ref<T: ZoruaField>(&self) -> &T {
+        const { assert_transmute_compatible::<Self, T>() };
         unsafe { mem::transmute(self) }
     }
 
-    fn transmute_mut<T: ZoruaField>(&mut self) -> &mut T
-    where
-        [(); compatible_layout::<Self, T>() as usize - 1]:,
-    {
+    fn transmute_mut<T: ZoruaField>(&mut self) -> &mut T {
+        const { assert_transmute_compatible::<Self, T>() };
         unsafe { mem::transmute(self) }
     }
 
-    fn transmute_split_ref<A: ZoruaField, B: ZoruaField>(&self) -> (&A, &B)
-    where
-        [(); compatible_layout::<Self, (A, B)>() as usize - 1]:,
-    {
+    fn transmute_split_ref<A: ZoruaField, B: ZoruaField>(&self) -> (&A, &B) {
+        const { assert_transmute_compatible::<Self, (A, B)>() };
         unsafe {
             let base = self as *const Self as *const u8;
             let a_ptr = base as *const A;
@@ -160,46 +165,14 @@ pub unsafe trait ZoruaField: Sized {
         }
     }
 
-    fn transmute_split_mut<A: ZoruaField, B: ZoruaField>(&mut self) -> (&mut A, &mut B)
-    where
-        [(); compatible_layout::<Self, (A, B)>() as usize - 1]:,
-    {
+    fn transmute_split_mut<A: ZoruaField, B: ZoruaField>(&mut self) -> (&mut A, &mut B) {
+        const { assert_transmute_compatible::<Self, (A, B)>() };
         unsafe {
             let base = self as *mut Self as *mut u8;
             let a_ptr = base as *mut A;
             let b_ptr = base.add(mem::size_of::<A>()) as *mut B;
             (&mut *a_ptr, &mut *b_ptr)
         }
-    }
-
-    fn into_aligned_bytes(self) -> aligned_bytes_of!(Self)
-    where
-        AlignOf<Self>: Alignment,
-    {
-        unsafe { crate::unconditional_transmute(self) }
-    }
-
-    fn as_aligned_bytes(&self) -> &aligned_bytes_of!(Self)
-    where
-        AlignOf<Self>: Alignment,
-    {
-        unsafe { mem::transmute(self) }
-    }
-
-    fn as_aligned_bytes_mut(&mut self) -> &mut aligned_bytes_of!(Self)
-    where
-        AlignOf<Self>: Alignment,
-    {
-        unsafe { mem::transmute(self) }
-    }
-}
-
-impl<T: ZoruaField> From<T> for aligned_bytes_of!(T)
-where
-    AlignOf<T>: Alignment,
-{
-    fn from(value: T) -> Self {
-        value.into_aligned_bytes()
     }
 }
 

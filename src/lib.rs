@@ -1,5 +1,3 @@
-#![allow(incomplete_features)]
-#![feature(generic_const_exprs)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 pub mod data_type;
@@ -92,19 +90,4 @@ pub mod prelude {
         }
     }
     pub use aligned_bytes_of;
-}
-
-/// # Safety
-/// The caller must ensure that both sizes `T` and `U` are equal
-/// and their alignments are compatible (i.e. the alignment of
-/// `T` is greater than or equal to `U`).
-pub(crate) unsafe fn unconditional_transmute<T, U>(val: T) -> U {
-    // Prevent `val` from being dropped
-    let mut val = core::mem::ManuallyDrop::new(val);
-
-    // Cast the pointer of `val` to the pointer of the desired type
-    let ptr = &mut *val as *mut T as *mut U;
-
-    // Read the value from the pointer
-    unsafe { ptr.read() }
 }

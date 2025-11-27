@@ -5,9 +5,10 @@ use crate::traits::ZoruaField;
 /// - Implement [`ZoruaField`]
 /// - Must be [`Copy`]
 #[repr(C, packed)] // Using repr(packed) (unsafe in general) here is fine because T:Copy
-#[derive(ZoruaField, Clone, Copy, Debug, PartialEq, Eq)]
-#[unsafe_confirm_no_padding] // repr(packed) ensures no padding
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Unaligned<T: ZoruaField + Copy>(T);
+
+unsafe impl<T: ZoruaField + Copy> ZoruaField for Unaligned<T> {}
 
 impl<T: ZoruaField + Copy> Unaligned<T> {
     pub const fn new(value: T) -> Self {
