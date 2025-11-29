@@ -91,58 +91,62 @@ fn main() {
 > Built-in primitives like `u16` do not implement `ZoruaField` because their internal representation is different on different architectures. Use `u16_le` instead, which is always stored in little-endian format. There are equivalents for `u32` and `u64`, for both little-endian and big-endian.
 
 ### Bitfields
-The `zorua` crate also supports adding virtual *bitfields* to your structs:
+Bitfields let you define sub-byte fields packed within a larger integer. They're useful for binary formats where multiple values are crammed into a single byte or word.
+
+The `bitfields!` macro wraps struct definitions, allowing you to attach bitfield accessors to a compatible field (the *backing field*):
 
 ```rust
 bitfields! {
     #[repr(C)]
     #[derive(ZoruaField)]
-    pub struct MyStruct {
-        pub field_a: u16_be,
-        field_b: u16_be, // Backing field (no `pub` so only bitfields are exposed)
-        |pub bitfield_a: u5@0, // 5 bit uint @ index 0
-        |pub bitfield_b: bool@5, // 1 bit bool @ index 5
-        |bitfield_c: u7@6, // Bitfields can be private too
-        |pub padding: u3@13, // The rest of the bits
-    };
+    pub struct Pokemon {
+        pub species: u16_le,
+        // Backing field stores the raw bits; bitfields provide typed access
+        iv_data: u32_le {
+            pub hp_iv: u5@0,       // bits 0-4
+            pub atk_iv: u5@5,      // bits 5-9
+            pub def_iv: u5@10,     // bits 10-14
+            pub speed_iv: u5@15,   // bits 15-19
+            pub spatk_iv: u5@20,   // bits 20-24
+            pub spdef_iv: u5@25,   // bits 25-29
+            pub is_egg: bool@30,   // bit 30
+            pub is_nicknamed: bool@31,
+        },
+    }
 }
 
 fn main() {
-    let myStruct = MyStruct {
-        field_a: 12u16.into(),
-        field_b: 367u16.into(), //0b000-0000101-1-01111
-    }
+    let pokemon = Pokemon {
+        species: 25u16.into(), // Pikachu
+        iv_data: 0x7FFF_FFFFu32.into(), // all IVs maxed
+    };
 
-    println!("{:#b}", myStruct.bitfield_a()); // "0b01111"
-    myStruct.set_bitfield_a(2u8.try_into().unwrap()); //casts u8->u5
-    println!("{:#b}", myStruct.bitfield_a()); // "0b00010"
+    println!("{}", pokemon.hp_iv());  // 31
+    pokemon.set_is_egg(true);
 }
-
 ```
 
-#### Declaring a bitfield
+#### Syntax
 ```
-field_b: u16_le, <------------ Backing field: field_b
-|pub bitfield_a: bool@0,
-|pub bitfield_b: u5@1,
- ^   ^           ^  ^
- |   |           |  |
- |   |           |  +- Type: u5
- |   |           +---- Index: 1
- |   +---------------- Name: bitfield_b
- +-------------------- (Optional) Vis keyword: pub
+backing_field: u32_le {
+    pub flag: bool@0,
+        lower: u7@1,
+    pub upper: u8@8,
+    ─┬─ ──┬── ─┬ ┬
+     │    │    │ └─ bit index
+     │    │    └─── type
+     │    └──────── name
+     └───────────── visibility
+},
 ```
+
+Each bitfield generates a getter (`name()`) and setter (`set_name()`). Doc comments on bitfields are supported.
 
 #### Bitfield types
-Only certain types can be used as bitfield types in the `bitfield!` macro.
 
-**`uX` Types**
+The prelude exports `u1` through `u15` for sub-byte integers. These work like standard Rust integers—use `.into()` for infallible conversions and `.try_into()` when overflow is possible.
 
-Importing `zorua::prelude::*` makes the types `u1`-`u15` available. These types are exactly what they seem, they are unsigned integers of varying bitsizes. Just like with the built-in `uX`'s, if a type can potentially over/underflow during conversion (e.g. `u14` into a `u12`), a `try_into()` is required instead of an `into()`.
-
-**Custom Bitfields**
-
-Just like the `ZoruaField` trait allows one to create structs capable of being transmuted, implementing the `ZoruaBitField` trait allows a struct to be used as a bitfield type in the `bitfield!` macro.
+You can also use `bool` (1 bit), or any type implementing `ZoruaBitField`.
 
 ### Enums
 While we've covered implementing `ZoruaField` and `ZoruaBitField` w.r.t to structs, the `zorua` crate *also* supports implementing these traits on [c-like enums](https://doc.rust-lang.org/rust-by-example/custom_types/enum/c_like.html).
@@ -188,10 +192,15 @@ enum MyEnum {
     Variant2, //2^1 < 3 < 2^2
 }
 
-struct MyStruct {
-    field_a: Fallible<MyEnum, u8>,
-    field_b: u8,
-    |pub test: Fallible<MyEnum, u2>@0
+bitfields! {
+    #[repr(C)]
+    #[derive(ZoruaField)]
+    struct MyStruct {
+        field_a: Fallible<MyEnum, u8>,
+        field_b: u8 {
+            pub test: Fallible<MyEnum, u2>@0,
+        },
+    }
 }
 
 fn main() {
