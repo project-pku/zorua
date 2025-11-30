@@ -26,18 +26,48 @@ pub mod prelude {
                 }
             }
         };
-        //all other bitfields
-        (impl "subfield_impl", $f:ident, [$(#[$sfm:meta])*], $sfv:vis, $sf:ident, $sfi:literal, $sft:tt, $($sftg1:tt, $sftg2:tt)?) => {
+        //single-generic bitfields (e.g., SpeciesId<u9>)
+        (impl "subfield_impl", $f:ident, [$(#[$sfm:meta])*], $sfv:vis, $sf:ident, $sfi:literal, $sft:tt, $sftg:tt,) => {
             paste! {
                 $(#[$sfm])*
-                $sfv fn $sf(&self) -> $sft$(<$sftg1, $sftg2>)? {
-                    let bit_repr = self.$f.get_bits_at::<<$sft$(<$sftg1, $sftg2>)? as ZoruaBitField>::BitRepr>($sfi);
-                    <$sft$(<$sftg1, $sftg2>)? as ZoruaBitField>::from_bit_repr(bit_repr)
+                $sfv fn $sf(&self) -> $sft<$sftg> {
+                    let bit_repr = self.$f.get_bits_at::<<$sft<$sftg> as ZoruaBitField>::BitRepr>($sfi);
+                    <$sft<$sftg> as ZoruaBitField>::from_bit_repr(bit_repr)
                 }
                 $(#[$sfm])*
-                $sfv fn [<set_ $sf>](&mut self, val: $sft$(<$sftg1, $sftg2>)?) {
+                $sfv fn [<set_ $sf>](&mut self, val: $sft<$sftg>) {
                     let bit_repr = val.to_bit_repr();
-                    self.$f.set_bits_at::<<$sft$(<$sftg1, $sftg2>)? as ZoruaBitField>::BitRepr>(bit_repr, $sfi);
+                    self.$f.set_bits_at::<<$sft<$sftg> as ZoruaBitField>::BitRepr>(bit_repr, $sfi);
+                }
+            }
+        };
+        //two-generic bitfields (e.g., Fallible<Ball, u4>)
+        (impl "subfield_impl", $f:ident, [$(#[$sfm:meta])*], $sfv:vis, $sf:ident, $sfi:literal, $sft:tt, $sftg1:tt, $sftg2:tt,) => {
+            paste! {
+                $(#[$sfm])*
+                $sfv fn $sf(&self) -> $sft<$sftg1, $sftg2> {
+                    let bit_repr = self.$f.get_bits_at::<<$sft<$sftg1, $sftg2> as ZoruaBitField>::BitRepr>($sfi);
+                    <$sft<$sftg1, $sftg2> as ZoruaBitField>::from_bit_repr(bit_repr)
+                }
+                $(#[$sfm])*
+                $sfv fn [<set_ $sf>](&mut self, val: $sft<$sftg1, $sftg2>) {
+                    let bit_repr = val.to_bit_repr();
+                    self.$f.set_bits_at::<<$sft<$sftg1, $sftg2> as ZoruaBitField>::BitRepr>(bit_repr, $sfi);
+                }
+            }
+        };
+        //non-generic bitfields (e.g., u9, bool)
+        (impl "subfield_impl", $f:ident, [$(#[$sfm:meta])*], $sfv:vis, $sf:ident, $sfi:literal, $sft:tt,) => {
+            paste! {
+                $(#[$sfm])*
+                $sfv fn $sf(&self) -> $sft {
+                    let bit_repr = self.$f.get_bits_at::<<$sft as ZoruaBitField>::BitRepr>($sfi);
+                    <$sft as ZoruaBitField>::from_bit_repr(bit_repr)
+                }
+                $(#[$sfm])*
+                $sfv fn [<set_ $sf>](&mut self, val: $sft) {
+                    let bit_repr = val.to_bit_repr();
+                    self.$f.set_bits_at::<<$sft as ZoruaBitField>::BitRepr>(bit_repr, $sfi);
                 }
             }
         };
@@ -53,7 +83,7 @@ pub mod prelude {
                     $({
                         $(
                             $(#[$subfield_meta:meta])*
-                            $sfv:vis $sf:ident : $sft:tt$(<$sftg1:tt, $sftg2:tt>)?@$sfi:literal,
+                            $sfv:vis $sf:ident : $sft:tt$(<$sftg1:tt $(, $sftg2:tt)?>)?@$sfi:literal,
                         )+
                     })?,
                 )*
@@ -70,7 +100,7 @@ pub mod prelude {
                 // Generate the impl block
                 impl$(<$($g$(:$gt$(+$gtx)*)?),+>)? $s$(<$($g),+>)? {
                     $($($(
-                        bitfields!(impl "subfield_impl", $f, [$(#[$subfield_meta])*], $sfv, $sf, $sfi, $sft, $($sftg1, $sftg2)?);
+                        bitfields!(impl "subfield_impl", $f, [$(#[$subfield_meta])*], $sfv, $sf, $sfi, $sft, $($sftg1, $($sftg2,)?)?);
                     )+)?)*
                 }
         };
