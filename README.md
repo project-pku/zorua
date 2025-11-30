@@ -20,6 +20,7 @@ The `zorua` crate was created to enable the following features safely, and withi
 - [Transmutation](#transmutation)
 - [Bitfields](#bitfields)
 - [Enums](#enums)
+- [Newtypes](#newtypes)
 
 ### Transmutation
 Deriving the `ZoruaField` trait places conditions on the implementing type to ensure safety. All these conditions are checked at compile time:
@@ -226,3 +227,34 @@ fn main() {
 Note that a `Fallible` type can be used either as a `ZoruaField` or `ZoruaBitField` depending on the given target.
 
 Also note that while `ZoruaFallible` can be derived for enums, you can manually implement it for structs as well (although you must ensure the safety conditions are met).
+
+### Newtypes
+The `ZoruaNewtype` derive macro enables generic newtype wrappers that need to work in both field and bitfield contexts.
+
+Unlike `ZoruaBitField` derive (which inherits the struct's generic bounds), `ZoruaNewtype` generates *conditional* impls based on what the inner type implements:
+- `impl ZoruaBitField` when `T: ZoruaBitField`
+- `impl ZoruaField` when `T: ZoruaField`
+
+This allows a single newtype like `struct MyId<T>(T)` to work with:
+- Bitfield-only types (`u4`, `u5`)
+- Field-only types (`u16_le`, `u32_le`)
+- Types implementing both (`u8`)
+
+```rust
+#[derive(ZoruaNewtype)]
+#[repr(transparent)] // required for layout safety
+pub struct PokemonId<T>(pub T);
+
+bitfields! {
+    #[repr(C)]
+    #[derive(ZoruaField)]
+    pub struct Pokemon {
+        // Works with field types
+        pub species: PokemonId<u16_le>,
+        data: u8 {
+            // Also works in bitfields
+            pub form: PokemonId<u4>@0,
+        },
+    }
+}
+```

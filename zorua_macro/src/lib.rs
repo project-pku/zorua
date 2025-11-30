@@ -285,6 +285,137 @@ pub fn zoruafallible_derive_macro(item: TokenStream) -> TokenStream {
     result.unwrap_or_else(|e| e.into_compile_error().into())
 }
 
+/// Derive macro for newtype wrappers that can implement both `ZoruaField` and `ZoruaBitField`.
+///
+/// This generates conditional impls that apply based on what the wrapped type implements:
+/// - `impl<T: ZoruaBitField> ZoruaBitField for Wrapper<T>` - for use in bitfields
+/// - `impl<T: ZoruaField> ZoruaField for Wrapper<T>` - for use as struct fields
+///
+/// This allows a single generic newtype to work with:
+/// - Bitfield-only types like `u4`, `u5`, etc.
+/// - Field-only types like `u16_le`, `u32_le`, etc.
+/// - Types that implement both like `u8`
+///
+/// # Requirements
+/// - Must be a tuple struct with exactly one field: `struct Name<T>(pub T)`
+/// - Must have `#[repr(transparent)]` to guarantee layout compatibility
+///
+/// # Example
+/// ```ignore
+/// #[derive(ZoruaNewtype)]
+/// #[repr(transparent)]
+/// pub struct MyId<T>(pub T);
+///
+/// // Now MyId<u4> works in bitfields, MyId<u16_le> works as fields,
+/// // and MyId<u8> works in both contexts.
+/// ```
+#[proc_macro_derive(ZoruaNewtype)]
+pub fn zoruanewtype_derive_macro(item: TokenStream) -> TokenStream {
+    let ast: DeriveInput = syn::parse(item).unwrap();
+    let result = match &ast.data {
+        Data::Struct(data) => impl_zoruanewtype_struct(&ast, data),
+        _ => Err(syn::Error::new_spanned(
+            &ast,
+            "ZoruaNewtype can only be derived for newtype structs",
+        )),
+    };
+    result.unwrap_or_else(|e| e.into_compile_error().into())
+}
+
+fn impl_zoruanewtype_struct(
+    ast: &DeriveInput,
+    data: &DataStruct,
+) -> Result<TokenStream, syn::Error> {
+    // Must be a newtype (single field)
+    if data.fields.len() != 1 {
+        return Err(syn::Error::new_spanned(
+            &ast.ident,
+            "ZoruaNewtype can only be derived for structs with exactly one field",
+        ));
+    }
+
+    let field0 = data.fields.iter().next().unwrap();
+
+    // Must be a tuple struct
+    if field0.ident.is_some() {
+        return Err(syn::Error::new_spanned(
+            field0,
+            "ZoruaNewtype can only be derived for tuple structs (use `struct Name<T>(T)` syntax)",
+        ));
+    }
+
+    // Must be #[repr(transparent)]
+    if !get_repr_state(&ast.attrs)?.repr_transparent {
+        return Err(syn::Error::new_spanned(
+            &ast.ident,
+            "ZoruaNewtype requires #[repr(transparent)] to ensure layout compatibility",
+        ));
+    }
+
+    let wrapped_ty = &field0.ty;
+    let ident = &ast.ident;
+
+    // Extract generic parameters without their bounds for the impl headers
+    // We'll add our own bounds in the where clauses
+    let generic_params: Vec<_> = ast.generics.params.iter().collect();
+    let type_params: Vec<_> = ast.generics.type_params().map(|p| &p.ident).collect();
+
+    // Build the impl generics (just the parameter names, no bounds)
+    let impl_generics = if generic_params.is_empty() {
+        quote! {}
+    } else {
+        let params = generic_params.iter().map(|p| match p {
+            syn::GenericParam::Type(t) => {
+                let ident = &t.ident;
+                quote! { #ident }
+            }
+            syn::GenericParam::Lifetime(l) => quote! { #l },
+            syn::GenericParam::Const(c) => {
+                let ident = &c.ident;
+                let ty = &c.ty;
+                quote! { const #ident: #ty }
+            }
+        });
+        quote! { <#(#params),*> }
+    };
+
+    // Build type generics (parameter names only, for the type being impl'd)
+    let type_generics = if type_params.is_empty() && ast.generics.lifetimes().count() == 0 {
+        quote! {}
+    } else {
+        let (_, ty_gen, _) = ast.generics.split_for_impl();
+        quote! { #ty_gen }
+    };
+
+    // Generate both conditional impls
+    let output = quote! {
+        // ZoruaBitField impl - applies when wrapped type is ZoruaBitField
+        impl #impl_generics ZoruaBitField for #ident #type_generics
+        where #wrapped_ty: ZoruaBitField
+        {
+            type BitRepr = <#wrapped_ty as ZoruaBitField>::BitRepr;
+
+            fn to_bit_repr(self) -> Self::BitRepr {
+                self.0.to_bit_repr()
+            }
+
+            fn from_bit_repr(value: Self::BitRepr) -> Self {
+                Self(<#wrapped_ty as ZoruaBitField>::from_bit_repr(value))
+            }
+        }
+
+        // ZoruaField impl - applies when wrapped type is ZoruaField
+        // SAFETY: #[repr(transparent)] guarantees this newtype has the same
+        // layout as the wrapped type. If T is a valid ZoruaField (POD with
+        // endian-independent representation), then this wrapper is too.
+        unsafe impl #impl_generics ZoruaField for #ident #type_generics
+        where #wrapped_ty: ZoruaField
+        {}
+    };
+
+    Ok(output.into())
+}
+
 fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, syn::Error> {
     let mut target_bytes: Vec<Type> = Vec::new();
     let mut target_bits: Vec<Type> = Vec::new();
@@ -461,6 +592,7 @@ struct ReprState {
     repr_c: bool,
     repr_u8: bool,
     repr_u16: bool,
+    repr_transparent: bool,
     repr_packed: Option<usize>,
 }
 
@@ -468,6 +600,7 @@ fn get_repr_state(attrs: &[Attribute]) -> Result<ReprState, syn::Error> {
     let mut repr_c = false;
     let mut repr_u8 = false;
     let mut repr_u16 = false;
+    let mut repr_transparent = false;
     let mut repr_packed = None::<usize>;
     for attr in attrs {
         if attr.path().is_ident("repr") {
@@ -487,6 +620,12 @@ fn get_repr_state(attrs: &[Attribute]) -> Result<ReprState, syn::Error> {
                 // #[repr(u16)]
                 if meta.path.is_ident("u16") {
                     repr_u16 = true;
+                    return Ok(());
+                }
+
+                // #[repr(transparent)]
+                if meta.path.is_ident("transparent") {
+                    repr_transparent = true;
                     return Ok(());
                 }
 
@@ -513,6 +652,7 @@ fn get_repr_state(attrs: &[Attribute]) -> Result<ReprState, syn::Error> {
         repr_c,
         repr_u8,
         repr_u16,
+        repr_transparent,
         repr_packed,
     })
 }
