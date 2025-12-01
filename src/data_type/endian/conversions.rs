@@ -90,11 +90,9 @@ impl_from_smaller_unsigned!(u16, I64, i64);
 impl_from_smaller_unsigned!(u32, I64, i64);
 
 // From impls for endian types to their native primitives
-impl_from_endian_to_primitive!(U8, u8);
 impl_from_endian_to_primitive!(U16, u16);
 impl_from_endian_to_primitive!(U32, u32);
 impl_from_endian_to_primitive!(U64, u64);
-impl_from_endian_to_primitive!(I8, i8);
 impl_from_endian_to_primitive!(I16, i16);
 impl_from_endian_to_primitive!(I32, i32);
 impl_from_endian_to_primitive!(I64, i64);
@@ -118,7 +116,6 @@ impl_try_from_endian_to_smaller!(I64, i64, i32);
 
 // Cross-type conversions (signed to unsigned, unsigned to signed)
 // Signed endian types to unsigned primitives
-impl_try_from_endian_to_smaller!(I8, i8, u8);
 impl_try_from_endian_to_smaller!(I16, i16, u8);
 impl_try_from_endian_to_smaller!(I16, i16, u16);
 impl_try_from_endian_to_smaller!(I32, i32, u8);
@@ -130,7 +127,6 @@ impl_try_from_endian_to_smaller!(I64, i64, u32);
 impl_try_from_endian_to_smaller!(I64, i64, u64);
 
 // Unsigned endian types to signed primitives
-impl_try_from_endian_to_smaller!(U8, u8, i8);
 impl_try_from_endian_to_smaller!(U16, u16, i8);
 impl_try_from_endian_to_smaller!(U16, u16, i16);
 impl_try_from_endian_to_smaller!(U32, u32, i8);
@@ -143,47 +139,33 @@ impl_try_from_endian_to_smaller!(U64, u64, i64);
 
 // TryFrom impls for primitives to endian types
 // Unsigned to smaller unsigned endian types
-impl_try_from!(u16, U8, u8);
-impl_try_from!(u32, U8, u8);
 impl_try_from!(u32, U16, u16);
-impl_try_from!(u64, U8, u8);
 impl_try_from!(u64, U16, u16);
 impl_try_from!(u64, U32, u32);
 
 // Signed to smaller signed endian types
-impl_try_from!(i16, I8, i8);
-impl_try_from!(i32, I8, i8);
 impl_try_from!(i32, I16, i16);
-impl_try_from!(i64, I8, i8);
 impl_try_from!(i64, I16, i16);
 impl_try_from!(i64, I32, i32);
 
 // Signed to unsigned endian types
-impl_try_from!(i8, U8, u8);
 impl_try_from!(i8, U16, u16);
 impl_try_from!(i8, U32, u32);
 impl_try_from!(i8, U64, u64);
-impl_try_from!(i16, U8, u8);
 impl_try_from!(i16, U16, u16);
 impl_try_from!(i16, U32, u32);
 impl_try_from!(i16, U64, u64);
-impl_try_from!(i32, U8, u8);
 impl_try_from!(i32, U16, u16);
 impl_try_from!(i32, U32, u32);
 impl_try_from!(i32, U64, u64);
-impl_try_from!(i64, U8, u8);
 impl_try_from!(i64, U16, u16);
 impl_try_from!(i64, U32, u32);
 impl_try_from!(i64, U64, u64);
 
 // Unsigned to signed endian types
-impl_try_from!(u8, I8, i8);
-impl_try_from!(u16, I8, i8);
 impl_try_from!(u16, I16, i16);
-impl_try_from!(u32, I8, i8);
 impl_try_from!(u32, I16, i16);
 impl_try_from!(u32, I32, i32);
-impl_try_from!(u64, I8, i8);
 impl_try_from!(u64, I16, i16);
 impl_try_from!(u64, I32, i32);
 impl_try_from!(u64, I64, i64);

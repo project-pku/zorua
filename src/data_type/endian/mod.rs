@@ -94,13 +94,11 @@ macro_rules! define_endian_int {
 }
 
 // Define all the unsigned types
-define_endian_int!(U8, u8);
 define_endian_int!(U16, u16);
 define_endian_int!(U32, u32);
 define_endian_int!(U64, u64);
 
 // Define all the signed types
-define_endian_int!(I8, i8);
 define_endian_int!(I16, i16);
 define_endian_int!(I32, i32);
 define_endian_int!(I64, i64);
@@ -138,10 +136,6 @@ mod tests {
 
     #[test]
     fn test_basic_integer_types() {
-        // Test U8
-        let u8_val: u8_be = u8_be::new(255);
-        assert_eq!(u8_val.value(), 255);
-
         // Test U16
         let u16_val: u16_le = u16_le::new(65535);
         assert_eq!(u16_val.value(), 65535);
@@ -151,9 +145,6 @@ mod tests {
         assert_eq!(u64_val.value(), 0xFFFFFFFFFFFFFFFF);
 
         // Test signed types
-        let i8_val: i8_le = i8_le::new(-128);
-        assert_eq!(i8_val.value(), -128);
-
         let i16_val: i16_be = i16_be::new(-32768);
         assert_eq!(i16_val.value(), -32768);
 
