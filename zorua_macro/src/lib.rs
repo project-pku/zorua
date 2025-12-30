@@ -1,8 +1,7 @@
 use proc_macro::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::{
-    Attribute, Data, DataEnum, DataStruct, DataUnion, DeriveInput, Expr, Fields, Lit, LitInt, Type,
-    parse::Parser, parse_str, token,
+    Attribute, Data, DataEnum, DataStruct, DataUnion, DeriveInput, Fields, LitInt, Type, token,
 };
 
 /// This derive macro works on structs and c-like enums.
@@ -10,7 +9,7 @@ use syn::{
 /// Composite structs must additionally have the
 /// [C repr](https://doc.rust-lang.org/nomicon/other-reprs.html#reprc),
 /// in order to ensure their layout.
-/// ```
+/// ```ignore
 /// #[derive(ZoruaField)]
 /// #[repr(C)] //mandatory for composite structs
 /// struct MyStruct {
@@ -99,7 +98,7 @@ fn impl_zoruafield_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStrea
             &ast.ident,
             format!(
                 "Enums must have exactly 256 variants to derive ZoruaField (found {}). \
-                Did you mean to derive ZoruaBitField or ZoruaFallible?",
+                Did you mean to derive ZoruaBitField?",
                 data.variants.len()
             ),
         ));
@@ -108,221 +107,196 @@ fn impl_zoruafield_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStrea
     Ok(generate_impl("ZoruaField", true, ast, None, None))
 }
 
-#[proc_macro_derive(ZoruaBitField)]
-pub fn zoruabitfield_derive_macro(item: TokenStream) -> TokenStream {
-    let ast: DeriveInput = syn::parse(item).unwrap(); //parse
+/// Derive macro that implements `ZoruaNative` trait for enums and newtype structs.
+///
+/// For enums with `#[repr(u8)]` or `#[repr(u16)]`, implements `ZoruaNative<ReprType>`
+/// where the conversion validates the discriminant value.
+///
+/// For newtype structs with a single field, delegates to the inner type's `ZoruaNative` implementation.
+///
+/// # Requirements for enums
+/// - Must have `#[repr(u8)]` or `#[repr(u16)]`
+/// - All variants must have explicit discriminant values
+///
+/// # Requirements for newtype structs  
+/// - Must be a tuple struct with exactly one field
+/// - Must have `#[repr(transparent)]`
+///
+/// # Example
+/// ```ignore
+/// #[derive(ZoruaNative)]
+/// #[repr(u8)]
+/// pub enum Language {
+///     Japanese = 1,
+///     English = 2,
+///     French = 3,
+/// }
+///
+/// // Now Language implements ZoruaNative<u8>
+/// ```
+#[proc_macro_derive(ZoruaNative)]
+pub fn zoruanative_derive_macro(item: TokenStream) -> TokenStream {
+    let ast: DeriveInput = syn::parse(item).unwrap();
     let result = match &ast.data {
-        Data::Struct(data) => impl_zoruabitfield_struct(&ast, data),
-        Data::Enum(data) => impl_zoruabitfield_enum(&ast, data),
+        Data::Enum(data) => impl_zoruanative_enum(&ast, data),
+        Data::Struct(data) => impl_zoruanative_struct(&ast, data),
         _ => Err(syn::Error::new_spanned(
             &ast,
-            "ZoruaBitField can only be derived for enums and newtype structs",
+            "ZoruaNative can only be derived for enums and structs",
         )),
     };
     result.unwrap_or_else(|e| e.into_compile_error().into())
 }
 
-fn impl_zoruabitfield_struct(
-    ast: &DeriveInput,
-    data: &DataStruct,
-) -> Result<TokenStream, syn::Error> {
-    if data.fields.len() != 1 {
+fn impl_zoruanative_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, syn::Error> {
+    let repr_state = get_repr_state(&ast.attrs)?;
+
+    // Determine cast repr type and max bits (used for self as Repr)
+    let (cast_repr, max_bits): (Type, usize) = if repr_state.repr_u8 {
+        (syn::parse_str("u8").unwrap(), 8)
+    } else if repr_state.repr_u16 {
+        (syn::parse_str("u16").unwrap(), 16)
+    } else {
         return Err(syn::Error::new_spanned(
             &ast.ident,
-            "Only structs with exactly one field can derive ZoruaBitField",
+            "ZoruaNative requires #[repr(u8)] or #[repr(u16)] for enums",
         ));
-    }
-    let field0 = data.fields.iter().collect::<Vec<&syn::Field>>()[0];
-    if field0.ident.is_some() {
-        return Err(syn::Error::new_spanned(
-            field0,
-            "Only tuple structs can derive ZoruaBitField (use `struct Name(Type)` syntax)",
-        ));
-    }
-    let wrapped_ty = &field0.ty;
-
-    Ok(generate_impl(
-        "ZoruaBitField",
-        false,
-        ast,
-        Some(quote! {
-            type BitRepr = <#wrapped_ty as ZoruaBitField>::BitRepr;
-            fn to_bit_repr(self) -> Self::BitRepr {
-                self.0.to_bit_repr()
-            }
-            fn from_bit_repr(value: Self::BitRepr) -> Self {
-                Self(<#wrapped_ty as ZoruaBitField>::from_bit_repr(value))
-            }
-        }),
-        None,
-    ))
-}
-
-fn impl_zoruabitfield_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, syn::Error> {
-    if !get_repr_state(&ast.attrs)?.repr_u8 {
-        return Err(syn::Error::new_spanned(
-            &ast.ident,
-            "The enum must have the u8 repr to derive ZoruaBitField. \
-            Try adding `#[repr(u8)]` to the enum.",
-        ));
-    }
-
-    let num_variants = data.variants.len();
-    let bit_repr: Type = match num_variants {
-        2 => parse_str("u1").unwrap(),
-        4 => parse_str("u2").unwrap(),
-        8 => parse_str("u3").unwrap(),
-        16 => parse_str("u4").unwrap(),
-        32 => parse_str("u5").unwrap(),
-        64 => parse_str("u6").unwrap(),
-        128 => parse_str("u7").unwrap(),
-        256 => parse_str("u8").unwrap(),
-        _ => {
-            return Err(syn::Error::new_spanned(
-                &ast.ident,
-                format!(
-                    "The number of variants must be a power of 2 from 2^1 to 2^8 (found {}).",
-                    num_variants
-                ),
-            ));
-        }
     };
 
-    //check if every val from 0-2^n is accounted for
-    let mut exists_vec = vec![false; num_variants];
-    let mut current = 0;
+    let ident = &ast.ident;
+    let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
+
+    // Validate variants and build match arms
+    let mut match_arms = quote! {};
     for variant in &data.variants {
         if !variant.fields.is_empty() {
             return Err(syn::Error::new_spanned(
                 variant,
-                "Enum must be c-like (variants cannot have fields)",
+                "ZoruaNative only supports c-like enums (variants cannot have fields)",
             ));
         }
-        match &variant.discriminant {
-            None => {
-                if current >= num_variants {
-                    return Err(syn::Error::new_spanned(
-                        variant,
-                        "The discriminants must cover every value from 0 to 2^n-1",
-                    ));
-                }
-                exists_vec[current] = true;
-                current += 1;
-            }
-            Some((_, expr)) => match expr {
-                Expr::Lit(expr) => match &expr.lit {
-                    Lit::Int(lit) => {
-                        current = lit.base10_parse().map_err(|_| {
-                            syn::Error::new_spanned(
-                                lit,
-                                "Enum discriminants must be expressed in base 10",
-                            )
-                        })?;
-                        if current >= num_variants {
-                            return Err(syn::Error::new_spanned(
-                                variant,
-                                "The discriminants must cover every value from 0 to 2^n-1",
-                            ));
-                        }
-                        exists_vec[current] = true;
-                        current += 1;
-                    }
-                    _ => {
-                        return Err(syn::Error::new_spanned(
-                            &expr.lit,
-                            "Invalid enum discriminant: expected integer literal",
-                        ));
-                    }
-                },
-                _ => {
-                    return Err(syn::Error::new_spanned(
-                        expr,
-                        "Invalid enum discriminant: expected literal expression",
-                    ));
-                }
-            },
+        if variant.discriminant.is_none() {
+            return Err(syn::Error::new_spanned(
+                variant,
+                "ZoruaNative requires explicit discriminant values for all variants",
+            ));
+        }
+        let variant_ident = &variant.ident;
+        match_arms.extend(quote! {
+            x if x == #ident::#variant_ident as #cast_repr => Ok(#ident::#variant_ident),
+        });
+    }
+
+    // Compute minimum bits required: ceil(log2(n)) for n variants
+    let variant_count = data.variants.len();
+    let min_bits = if variant_count <= 1 {
+        1
+    } else {
+        (usize::BITS - (variant_count - 1).leading_zeros()) as usize
+    };
+
+    // Build list of all storage types to implement for:
+    // - All uX types from min_bits to max_bits (matching repr)
+    // - For u16+, also add _le and _be endian variants
+    let mut all_types: Vec<(Type, bool, usize)> = Vec::new(); // (type, is_endian, bits)
+
+    // Add ux2 types for bits < 8 (u1-u7)
+    for bits in min_bits..8.min(max_bits + 1) {
+        let ty_name = format!("u{}", bits);
+        if let Ok(ty) = syn::parse_str::<Type>(&ty_name) {
+            all_types.push((ty, false, bits));
         }
     }
-    if !exists_vec.iter().all(|value| *value) {
-        return Err(syn::Error::new_spanned(
-            &ast.ident,
-            "The discriminants must cover every value from 0 to 2^n-1 without gaps",
-        ));
+
+    // Add u8 if we have repr(u8) or repr(u16)
+    if min_bits <= 8 && max_bits >= 8 {
+        all_types.push((syn::parse_str("u8").unwrap(), false, 8));
     }
 
-    Ok(generate_impl(
-        "ZoruaBitField",
-        false,
-        ast,
-        Some(quote! {
-            type BitRepr = #bit_repr;
-            fn to_bit_repr(self) -> Self::BitRepr {
-                Self::BitRepr::from_backed(self as <Self::BitRepr as BackingBitField>::ByteRepr)
+    // Add ux2 types for bits 9-15 if repr(u16)
+    if max_bits >= 16 {
+        for bits in 9.max(min_bits)..16 {
+            let ty_name = format!("u{}", bits);
+            if let Ok(ty) = syn::parse_str::<Type>(&ty_name) {
+                all_types.push((ty, false, bits));
             }
-            fn from_bit_repr(value: Self::BitRepr) -> Self {
-                // SAFETY:
-                // 1) Every possible value of BitRepr corresponds to a variant (as verified above)
-                // 2) alignment is not a concern for transmuting values (as opposed to references)
-                unsafe { core::mem::transmute(value.to_backed() as <Self::BitRepr as BackingBitField>::ByteRepr) }
+        }
+    }
+
+    // Add u16 and endian variants if repr(u16)
+    if min_bits <= 16 && max_bits >= 16 {
+        all_types.push((syn::parse_str("u16").unwrap(), false, 16));
+        all_types.push((syn::parse_str("u16_le").unwrap(), true, 16));
+        all_types.push((syn::parse_str("u16_be").unwrap(), true, 16));
+    }
+
+    // Also add endian variants for larger types when using native primitives
+    // u32_le/be and u64_le/be - these allow enums to be used where the storage
+    // is wider than needed (like padding fields)
+    if max_bits >= 8 {
+        // These are always fallible since variant_count << 2^32 or 2^64
+        all_types.push((syn::parse_str("u32").unwrap(), false, 32));
+        all_types.push((syn::parse_str("u32_le").unwrap(), true, 32));
+        all_types.push((syn::parse_str("u32_be").unwrap(), true, 32));
+        all_types.push((syn::parse_str("u64").unwrap(), false, 64));
+        all_types.push((syn::parse_str("u64_le").unwrap(), true, 64));
+        all_types.push((syn::parse_str("u64_be").unwrap(), true, 64));
+    }
+
+    let mut impls = quote! {};
+
+    for (target_ty, is_endian, bits) in all_types {
+        // Determine if this impl is fallible:
+        // Fallible when variant_count < 2^bits (not all bit patterns are valid)
+        let is_fallible = if bits >= 64 {
+            true // Always fallible for 64-bit (can't have 2^64 variants)
+        } else {
+            variant_count < (1usize << bits)
+        };
+
+        // Get the storage value ready for matching - needs to become cast_repr type
+        let storage_val = if is_endian {
+            // Endian types have .value() method returning native primitive
+            quote! { (storage.value() as #cast_repr) }
+        } else if is_primitive(&target_ty) {
+            // Native primitives may be wider than cast_repr, need explicit cast
+            quote! { (storage as #cast_repr) }
+        } else {
+            // ux2 types - convert via Into to cast_repr
+            quote! { #cast_repr::from(storage) }
+        };
+
+        // Convert from enum to storage type - widen if necessary
+        let to_storage = if is_endian {
+            quote! { #target_ty::new(self as #cast_repr as _) }
+        } else if !is_primitive(&target_ty) {
+            quote! { #target_ty::new(self as #cast_repr as _) } // ux2 types
+        } else {
+            quote! { (self as #cast_repr) as #target_ty }
+        };
+
+        impls.extend(quote! {
+            impl #impl_generics ZoruaNative<#target_ty> for #ident #type_generics #where_clause {
+                const IS_FALLIBLE: bool = #is_fallible;
+
+                fn try_from_storage(storage: #target_ty) -> Result<Self, #target_ty> {
+                    match #storage_val as #cast_repr {
+                        #match_arms
+                        _ => Err(storage),
+                    }
+                }
+
+                fn to_storage(self) -> #target_ty {
+                    #to_storage
+                }
             }
-        }),
-        None,
-    ))
+        });
+    }
+
+    Ok(impls.into())
 }
 
-/// On top of implementing the ZoruaFallible trait, this derive macro
-/// also includes a [TryInto]`<Self>` impl for [Fallible]`<Self, B>`.
-#[proc_macro_derive(ZoruaFallible, attributes(target_byte, target_bit))]
-pub fn zoruafallible_derive_macro(item: TokenStream) -> TokenStream {
-    let ast: DeriveInput = syn::parse(item).unwrap(); //parse
-    let result = match &ast.data {
-        Data::Enum(data) => impl_zoruafallible_enum(&ast, data),
-        _ => Err(syn::Error::new_spanned(
-            &ast,
-            "ZoruaFallible can only be derived for enums",
-        )),
-    };
-    result.unwrap_or_else(|e| e.into_compile_error().into())
-}
-
-/// Derive macro for newtype wrappers that can implement both `ZoruaField` and `ZoruaBitField`.
-///
-/// This generates conditional impls that apply based on what the wrapped type implements:
-/// - `impl<T: ZoruaBitField> ZoruaBitField for Wrapper<T>` - for use in bitfields
-/// - `impl<T: ZoruaField> ZoruaField for Wrapper<T>` - for use as struct fields
-///
-/// This allows a single generic newtype to work with:
-/// - Bitfield-only types like `u4`, `u5`, etc.
-/// - Field-only types like `u16_le`, `u32_le`, etc.
-/// - Types that implement both like `u8`
-///
-/// # Requirements
-/// - Must be a tuple struct with exactly one field: `struct Name<T>(pub T)`
-/// - Must have `#[repr(transparent)]` to guarantee layout compatibility
-///
-/// # Example
-/// ```ignore
-/// #[derive(ZoruaNewtype)]
-/// #[repr(transparent)]
-/// pub struct MyId<T>(pub T);
-///
-/// // Now MyId<u4> works in bitfields, MyId<u16_le> works as fields,
-/// // and MyId<u8> works in both contexts.
-/// ```
-#[proc_macro_derive(ZoruaNewtype)]
-pub fn zoruanewtype_derive_macro(item: TokenStream) -> TokenStream {
-    let ast: DeriveInput = syn::parse(item).unwrap();
-    let result = match &ast.data {
-        Data::Struct(data) => impl_zoruanewtype_struct(&ast, data),
-        _ => Err(syn::Error::new_spanned(
-            &ast,
-            "ZoruaNewtype can only be derived for newtype structs",
-        )),
-    };
-    result.unwrap_or_else(|e| e.into_compile_error().into())
-}
-
-fn impl_zoruanewtype_struct(
+fn impl_zoruanative_struct(
     ast: &DeriveInput,
     data: &DataStruct,
 ) -> Result<TokenStream, syn::Error> {
@@ -330,7 +304,7 @@ fn impl_zoruanewtype_struct(
     if data.fields.len() != 1 {
         return Err(syn::Error::new_spanned(
             &ast.ident,
-            "ZoruaNewtype can only be derived for structs with exactly one field",
+            "ZoruaNative can only be derived for structs with exactly one field (newtypes)",
         ));
     }
 
@@ -340,7 +314,7 @@ fn impl_zoruanewtype_struct(
     if field0.ident.is_some() {
         return Err(syn::Error::new_spanned(
             field0,
-            "ZoruaNewtype can only be derived for tuple structs (use `struct Name<T>(T)` syntax)",
+            "ZoruaNative can only be derived for tuple structs (use `struct Name(T)` syntax)",
         ));
     }
 
@@ -348,222 +322,54 @@ fn impl_zoruanewtype_struct(
     if !get_repr_state(&ast.attrs)?.repr_transparent {
         return Err(syn::Error::new_spanned(
             &ast.ident,
-            "ZoruaNewtype requires #[repr(transparent)] to ensure layout compatibility",
+            "ZoruaNative requires #[repr(transparent)] for newtype structs",
         ));
     }
 
     let wrapped_ty = &field0.ty;
     let ident = &ast.ident;
+    let generic_params = &ast.generics.params;
+    let (_, type_generics, where_clause) = ast.generics.split_for_impl();
 
-    // Extract generic parameters without their bounds for the impl headers
-    // We'll add our own bounds in the where clauses
-    let generic_params: Vec<_> = ast.generics.params.iter().collect();
-    let type_params: Vec<_> = ast.generics.type_params().map(|p| &p.ident).collect();
-
-    // Build the impl generics (just the parameter names, no bounds)
-    let impl_generics = if generic_params.is_empty() {
-        quote! {}
-    } else {
-        let params = generic_params.iter().map(|p| match p {
-            syn::GenericParam::Type(t) => {
-                let ident = &t.ident;
-                quote! { #ident }
-            }
-            syn::GenericParam::Lifetime(l) => quote! { #l },
-            syn::GenericParam::Const(c) => {
-                let ident = &c.ident;
-                let ty = &c.ty;
-                quote! { const #ident: #ty }
-            }
-        });
-        quote! { <#(#params),*> }
-    };
-
-    // Build type generics (parameter names only, for the type being impl'd)
-    let type_generics = if type_params.is_empty() && ast.generics.lifetimes().count() == 0 {
-        quote! {}
-    } else {
-        let (_, ty_gen, _) = ast.generics.split_for_impl();
-        quote! { #ty_gen }
-    };
-
-    // Generate both conditional impls
+    // Generate impl that delegates to inner type
+    // Uses a generic Storage parameter bound by inner type's ZoruaNative impl
     let output = quote! {
-        // ZoruaBitField impl - applies when wrapped type is ZoruaBitField
-        impl #impl_generics ZoruaBitField for #ident #type_generics
-        where #wrapped_ty: ZoruaBitField
+        impl<Storage, #generic_params> ZoruaNative<Storage> for #ident #type_generics
+        where
+            #wrapped_ty: ZoruaNative<Storage>,
+            Storage: Clone,
+            #where_clause
         {
-            type BitRepr = <#wrapped_ty as ZoruaBitField>::BitRepr;
+            // Delegate fallibility to the wrapped type
+            const IS_FALLIBLE: bool = <#wrapped_ty as ZoruaNative<Storage>>::IS_FALLIBLE;
 
-            fn to_bit_repr(self) -> Self::BitRepr {
-                self.0.to_bit_repr()
+            fn try_from_storage(storage: Storage) -> Result<Self, Storage> {
+                <#wrapped_ty as ZoruaNative<Storage>>::try_from_storage(storage)
+                    .map(Self)
             }
 
-            fn from_bit_repr(value: Self::BitRepr) -> Self {
-                Self(<#wrapped_ty as ZoruaBitField>::from_bit_repr(value))
+            fn to_storage(self) -> Storage {
+                <#wrapped_ty as ZoruaNative<Storage>>::to_storage(self.0)
             }
         }
-
-        // ZoruaField impl - applies when wrapped type is ZoruaField
-        // SAFETY: #[repr(transparent)] guarantees this newtype has the same
-        // layout as the wrapped type. If T is a valid ZoruaField (POD with
-        // endian-independent representation), then this wrapper is too.
-        unsafe impl #impl_generics ZoruaField for #ident #type_generics
-        where #wrapped_ty: ZoruaField
-        {}
     };
 
     Ok(output.into())
 }
 
-fn impl_zoruafallible_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, syn::Error> {
-    let mut target_bytes: Vec<Type> = Vec::new();
-    let mut target_bits: Vec<Type> = Vec::new();
-    let repr: Type;
-
-    for attr in &ast.attrs {
-        if attr.path().is_ident("target_byte") {
-            let args: proc_macro2::TokenStream = attr.parse_args().map_err(|_| {
-                syn::Error::new_spanned(
-                    attr,
-                    "The `target_byte` attribute must contain a list of BackingField types, \
-                    e.g. #[target_byte(u8, u16_le)]",
-                )
-            })?;
-            let data = syn::punctuated::Punctuated::<syn::Type, syn::Token![,]>::parse_terminated
-                .parse2(args)?;
-
-            if !data.is_empty() {
-                target_bytes.extend(data);
-            }
-        }
-
-        if attr.path().is_ident("target_bit") {
-            let args: proc_macro2::TokenStream = attr.parse_args().map_err(|_| {
-                syn::Error::new_spanned(
-                    attr,
-                    "The `target_bit` attribute must contain a list of BackingBitField types, \
-                    e.g. #[target_bit(u3, u7)]",
-                )
-            })?;
-            let data = syn::punctuated::Punctuated::<syn::Type, syn::Token![,]>::parse_terminated
-                .parse2(args)?;
-
-            if !data.is_empty() {
-                target_bits.extend(data);
-            }
-        }
-    }
-
-    let repr_state = get_repr_state(&ast.attrs)?;
-    if repr_state.repr_u16 {
-        repr = syn::parse_str("u16").unwrap();
-    } else if repr_state.repr_u8 {
-        repr = syn::parse_str("u8").unwrap();
-    } else {
-        return Err(syn::Error::new_spanned(
-            &ast.ident,
-            "The enum must have either the u8 or u16 repr. \
-            Try adding `#[repr(u8)]` or `#[repr(u16)]` to the enum.",
-        ));
-    }
-
-    if target_bytes.is_empty() && target_bits.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &ast.ident,
-            "You must include at least 1 target type using either #[target_byte] or #[target_bit]",
-        ));
-    }
-
-    let ident = ast.ident.clone();
-    let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
-    let mut final_ts = quote! {};
-
-    // Process BackingField types (target_byte)
-    for ty in target_bytes {
-        // Generate variant checks for this specific type
-        let mut variant_checks = quote! {};
-        for variant in &data.variants {
-            if !variant.fields.is_empty() {
-                return Err(syn::Error::new_spanned(
-                    variant,
-                    "ZoruaFallible only supports c-like enums (variants cannot have fields)",
-                ));
-            }
-            let variant_ident = &variant.ident;
-            variant_checks.extend(quote! {
-                if value == <#ty>::from(#ident::#variant_ident as #repr) {
-                    return Ok(#ident::#variant_ident);
-                }
-            });
-        }
-
-        final_ts.extend(quote! {
-            unsafe impl #impl_generics ZoruaFallible<#ty> for #ident #type_generics #where_clause {}
-
-            const _: () = {
-                #[inline(always)]
-                fn try_from_backing(value: #ty) -> Result<#ident, #ty> {
-                    #variant_checks
-                    Err(value)
-                }
-
-                impl TryInto<#ident> for Fallible<#ident, #ty> {
-                    type Error = #ty;
-                    fn try_into(self) -> Result<#ident, #ty> {
-                        try_from_backing(self.value)
-                    }
-                }
-            };
-        });
-    }
-
-    // Process BackingBitField types (target_bit)
-    for ty in target_bits {
-        // Generate variant checks for this specific type
-        let mut variant_checks = quote! {};
-        for variant in &data.variants {
-            if !variant.fields.is_empty() {
-                return Err(syn::Error::new_spanned(
-                    variant,
-                    "ZoruaFallible only supports c-like enums (variants cannot have fields)",
-                ));
-            }
-            let variant_ident = &variant.ident;
-            variant_checks.extend(quote! {
-                if backed_val == (#ident::#variant_ident as <#ty as BackingBitField>::ByteRepr) {
-                    return Ok(#ident::#variant_ident);
-                }
-            });
-        }
-
-        final_ts.extend(quote! {
-            unsafe impl #impl_generics ZoruaFallible<#ty> for #ident #type_generics #where_clause {}
-
-            const _: () = {
-                #[inline(always)]
-                fn try_from_backing(value: #ty) -> Result<#ident, #ty> {
-                    let backed_val = <#ty as BackingBitField>::to_backed(value);
-                    #variant_checks
-                    Err(value)
-                }
-
-                impl TryInto<#ident> for Fallible<#ident, #ty> {
-                    type Error = #ty;
-                    fn try_into(self) -> Result<#ident, #ty> {
-                        try_from_backing(self.value)
-                    }
-                }
-            };
-        });
-    }
-
-    Ok(final_ts.into())
-}
-
 // --------------
 // Helper fns
 // --------------
+fn is_primitive(ty: &Type) -> bool {
+    if let Type::Path(tp) = ty {
+        if let Some(segment) = tp.path.segments.last() {
+            let name = segment.ident.to_string();
+            return matches!(name.as_str(), "u8" | "u16" | "u32" | "u64");
+        }
+    }
+    false
+}
+
 fn generate_impl(
     ty: &str,
     is_unsafe: bool,
@@ -1001,207 +807,134 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
             } else {
                 f.name.clone()
             };
-            let storage_type = &f.storage_type;
+            let field_ty = &f.storage_type;
+
             quote! {
                 #(#field_attrs)*
-                #field_vis #field_name: #storage_type
+                #field_vis #field_name: #field_ty
             }
         })
         .collect();
 
-    // Generate field accessors (getter and setter) ONLY for backed fields (those with `as BackingType`)
-    // Regular fields (no `as`) just get direct access
-    let accessors: Vec<_> = fields.iter().filter(|f| f.has_backing_type).map(|f| {
-        let field_attrs = &f.attrs;
-        let field_vis = &f.vis;
-        let getter_name = &f.name;
-        let setter_name = syn::Ident::new(&format!("set_{}", f.name), f.name.span());
-        let raw_name = syn::Ident::new(&format!("{}_raw", f.name), f.name.span());
-        let native_type = &f.native_type;
-        let storage_type = &f.storage_type;
+    // Generate field accessors (getter and setter) ONLY for backed fields
+    let accessors: Vec<_> = fields
+        .iter()
+        .filter(|f| f.has_backing_type)
+        .map(|f| {
+            let field_attrs = &f.attrs;
+            let field_vis = &f.vis;
+            let field_name = &f.name;
+            let field_raw_name = syn::Ident::new(&format!("{}_raw", f.name), f.name.span());
+            let field_setter = syn::Ident::new(&format!("set_{}", f.name), f.name.span());
+            let field_raw_setter = syn::Ident::new(&format!("set_{}_raw", f.name), f.name.span());
+            let field_native_type = &f.native_type;
+            let field_storage_type = &f.storage_type;
 
-        // Check if both types are arrays - if so, generate element-wise conversion
-        if let (Type::Array(native_arr), Type::Array(storage_arr)) = (native_type, storage_type) {
-            let native_elem = &native_arr.elem;
-            let storage_elem = &storage_arr.elem;
-
-            // Non-fallible array field: getter returns array with element-wise conversion
             quote! {
+                // Aliased getter - returns NativeType via ZoruaNative<StorageType>
                 #(#field_attrs)*
-                #[doc = concat!("Get the [`", stringify!(#native_type), "`] value from the `", stringify!(#raw_name), "` field.")]
-                #field_vis fn #getter_name(&self) -> #native_type {
-                    self.#raw_name.clone().map(|s| <#native_elem as ZoruaNative<#storage_elem>>::from_storage(s))
+                #field_vis fn #field_name(&self) -> #field_native_type {
+                    let storage_val = self.#field_raw_name();
+                    <#field_native_type as ZoruaNative<#field_storage_type>>::from_storage(storage_val)
                 }
 
+                // Aliased setter - accepts NativeType
                 #(#field_attrs)*
-                #[doc = concat!("Set the `", stringify!(#raw_name), "` field from a [`", stringify!(#native_type), "`] value.")]
-                #field_vis fn #setter_name(&mut self, val: #native_type) {
-                    self.#raw_name = val.map(|n| <#native_elem as ZoruaNative<#storage_elem>>::to_storage(n));
+                #field_vis fn #field_setter(&mut self, val: #field_native_type) {
+                    let storage_val = <#field_native_type as ZoruaNative<#field_storage_type>>::to_storage(val);
+                    self.#field_raw_setter(storage_val);
+                }
+
+                // Raw getter - returns StorageType directly
+                #(#field_attrs)*
+                #field_vis fn #field_raw_name(&self) -> #field_storage_type {
+                    self.#field_raw_name
+                }
+
+                // Raw setter - accepts StorageType
+                #(#field_attrs)*
+                #field_vis fn #field_raw_setter(&mut self, val: #field_storage_type) {
+                    self.#field_raw_name = val;
                 }
             }
-        } else {
-            // Non-fallible field: getter returns NativeType directly (via ZoruaNative)
-            quote! {
-                #(#field_attrs)*
-                #[doc = concat!("Get the [`", stringify!(#native_type), "`] value from the `", stringify!(#raw_name), "` field.")]
-                #field_vis fn #getter_name(&self) -> #native_type {
-                    <#native_type as ZoruaNative<#storage_type>>::from_storage(self.#raw_name.clone())
-                }
-
-                #(#field_attrs)*
-                #[doc = concat!("Set the `", stringify!(#raw_name), "` field from a [`", stringify!(#native_type), "`] value.")]
-                #field_vis fn #setter_name(&mut self, val: #native_type) {
-                    self.#raw_name = <#native_type as ZoruaNative<#storage_type>>::to_storage(val);
-                }
-            }
-        }
-    }).collect();
+        })
+        .collect();
 
     // Generate bitfield subfield accessors
-    let bitfield_accessors: Vec<_> = fields.iter().filter_map(|f| {
-        f.bitfield_subfields.as_ref().map(|subfields| {
-            let container_raw_name = if f.has_backing_type {
-                syn::Ident::new(&format!("{}_raw", f.name), f.name.span())
-            } else {
-                f.name.clone()
-            };
+    let bitfield_accessors: Vec<_> = fields
+        .iter()
+        .filter_map(|f| {
+            f.bitfield_subfields.as_ref().map(|subfields| {
+                let container_raw_name = if f.has_backing_type {
+                    syn::Ident::new(&format!("{}_raw", f.name), f.name.span())
+                } else {
+                    f.name.clone()
+                };
 
-            subfields.iter().map(|sf| {
-                let sf_attrs = &sf.attrs;
-                let sf_vis = &sf.vis;
-                let sf_name = &sf.name;
-                let sf_setter = syn::Ident::new(&format!("set_{}", sf.name), sf.name.span());
-                let sf_native_type = &sf.native_type;
-                let sf_storage_type = &sf.storage_type;
-                let sf_offset = &sf.bit_offset;
+                subfields.iter().map(move |sf| {
+                    let sf_attrs = &sf.attrs;
+                    let sf_vis = &sf.vis;
+                    let sf_name = &sf.name;
+                    let sf_setter = syn::Ident::new(&format!("set_{}", sf.name), sf.name.span());
+                    let sf_native_type = &sf.native_type;
+                    let sf_storage_type = &sf.storage_type;
+                    let sf_offset = &sf.bit_offset;
 
-                // Parse storage type to check if it's an array [T; N]
-                let storage_type: Type = syn::parse2(sf_storage_type.clone()).expect("Failed to parse subfield storage type");
-
-                if let Type::Array(type_array) = storage_type {
-                    let elem = &type_array.elem;
-                    // Array bitfield: generate indexed accessors
                     if sf.has_backing_type {
-                        // Parse native type array element
-                        let native_type: Type = syn::parse2(sf_native_type.clone()).expect("Failed to parse subfield native type");
-                        if let Type::Array(native_array) = native_type {
-                            let native_elem = &native_array.elem;
-                            let sf_raw_name = syn::Ident::new(&format!("{}_raw", sf.name), sf.name.span());
-                            let sf_raw_setter = syn::Ident::new(&format!("set_{}_raw", sf.name), sf.name.span());
-                            
-                            quote! {
-                                // Aliased getter - returns NativeType via ZoruaNative
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_name(&self, index: usize) -> #native_elem {
-                                    let storage_val = self.#sf_raw_name(index);
-                                    <#native_elem as ZoruaNative<#elem>>::from_storage(storage_val)
-                                }
+                        // Aliased bitfield subfield: generate both aliased and _raw accessors
+                        let sf_raw_name = syn::Ident::new(&format!("{}_raw", sf.name), sf.name.span());
+                        let sf_raw_setter = syn::Ident::new(&format!("set_{}_raw", sf.name), sf.name.span());
 
-                                // Aliased setter
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_setter(&mut self, val: #native_elem, index: usize) {
-                                    let storage_val = <#native_elem as ZoruaNative<#elem>>::to_storage(val);
-                                    self.#sf_raw_setter(storage_val, index);
-                                }
-
-                                // Raw getter - returns StorageType directly
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_raw_name(&self, index: usize) -> #elem {
-                                    let bit_len = <#elem as ZoruaBitField>::BitRepr::BITS as usize;
-                                    let offset = #sf_offset + (bit_len * index);
-                                    let bit_repr = self.#container_raw_name.get_bits_at::<<#elem as ZoruaBitField>::BitRepr>(offset);
-                                    <#elem as ZoruaBitField>::from_bit_repr(bit_repr)
-                                }
-
-                                // Raw setter
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_raw_setter(&mut self, val: #elem, index: usize) {
-                                    let bit_repr = val.to_bit_repr();
-                                    let bit_len = <#elem as ZoruaBitField>::BitRepr::BITS as usize;
-                                    let offset = #sf_offset + (bit_len * index);
-                                    self.#container_raw_name.set_bits_at::<<#elem as ZoruaBitField>::BitRepr>(bit_repr, offset);
-                                }
+                        quote! {
+                            // Aliased getter - returns NativeType via ZoruaNative<StorageType>
+                            #(#sf_attrs)*
+                            #sf_vis fn #sf_name(&self) -> #sf_native_type {
+                                let storage_val = self.#sf_raw_name();
+                                <#sf_native_type as ZoruaNative<#sf_storage_type>>::from_storage(storage_val)
                             }
-                        } else {
-                            panic!("Bitfield subfield with `as` syntax: native type must also be an array if storage type is an array");
+
+                            // Aliased setter
+                            #(#sf_attrs)*
+                            #sf_vis fn #sf_setter(&mut self, val: #sf_native_type) {
+                                let storage_val = <#sf_native_type as ZoruaNative<#sf_storage_type>>::to_storage(val);
+                                self.#sf_raw_setter(storage_val);
+                            }
+
+                            // Raw getter - returns StorageType directly
+                            #(#sf_attrs)*
+                            #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
+                                self.#container_raw_name.get_bits_at::<#sf_storage_type>(#sf_offset)
+                            }
+
+                            // Raw setter
+                            #(#sf_attrs)*
+                            #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
+                                self.#container_raw_name.set_bits_at::<#sf_storage_type>(val, #sf_offset);
+                            }
                         }
                     } else {
-                        // Non-aliased array bitfield
+                        // Direct bitfield subfield (no `as`): generate direct accessors
                         quote! {
                             #(#sf_attrs)*
-                            #sf_vis fn #sf_name(&self, index: usize) -> #elem {
-                                let bit_len = <#elem as ZoruaBitField>::BitRepr::BITS as usize;
-                                let offset = #sf_offset + (bit_len * index);
-                                let bit_repr = self.#container_raw_name.get_bits_at::<<#elem as ZoruaBitField>::BitRepr>(offset);
-                                <#elem as ZoruaBitField>::from_bit_repr(bit_repr)
+                            #sf_vis fn #sf_name(&self) -> #sf_native_type {
+                                self.#container_raw_name.get_bits_at::<#sf_native_type>(#sf_offset)
                             }
 
                             #(#sf_attrs)*
-                            #sf_vis fn #sf_setter(&mut self, val: #elem, index: usize) {
-                                let bit_repr = val.to_bit_repr();
-                                let bit_len = <#elem as ZoruaBitField>::BitRepr::BITS as usize;
-                                let offset = #sf_offset + (bit_len * index);
-                                self.#container_raw_name.set_bits_at::<<#elem as ZoruaBitField>::BitRepr>(bit_repr, offset);
+                            #sf_vis fn #sf_setter(&mut self, val: #sf_native_type) {
+                                self.#container_raw_name.set_bits_at::<#sf_native_type>(val, #sf_offset);
                             }
                         }
                     }
-                } else if sf.has_backing_type {
-                    // Aliased bitfield subfield: generate both aliased and _raw accessors
-                    let sf_raw_name = syn::Ident::new(&format!("{}_raw", sf.name), sf.name.span());
-                    let sf_raw_setter = syn::Ident::new(&format!("set_{}_raw", sf.name), sf.name.span());
-                    
-                    quote! {
-                        // Aliased getter - returns NativeType via ZoruaNative
-                        #(#sf_attrs)*
-                        #sf_vis fn #sf_name(&self) -> #sf_native_type {
-                            let storage_val = self.#sf_raw_name();
-                            <#sf_native_type as ZoruaNative<#sf_storage_type>>::from_storage(storage_val)
-                        }
-
-                        // Aliased setter
-                        #(#sf_attrs)*
-                        #sf_vis fn #sf_setter(&mut self, val: #sf_native_type) {
-                            let storage_val = <#sf_native_type as ZoruaNative<#sf_storage_type>>::to_storage(val);
-                            self.#sf_raw_setter(storage_val);
-                        }
-
-                        // Raw getter - returns StorageType directly
-                        #(#sf_attrs)*
-                        #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
-                            let bit_repr = self.#container_raw_name.get_bits_at::<<#sf_storage_type as ZoruaBitField>::BitRepr>(#sf_offset);
-                            <#sf_storage_type as ZoruaBitField>::from_bit_repr(bit_repr)
-                        }
-
-                        // Raw setter
-                        #(#sf_attrs)*
-                        #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
-                            let bit_repr = val.to_bit_repr();
-                            self.#container_raw_name.set_bits_at::<<#sf_storage_type as ZoruaBitField>::BitRepr>(bit_repr, #sf_offset);
-                        }
-                    }
-                } else {
-                    // Standard bitfield subfield (no `as`): generate simple value accessors
-                    quote! {
-                        #(#sf_attrs)*
-                        #sf_vis fn #sf_name(&self) -> #sf_storage_type {
-                            let bit_repr = self.#container_raw_name.get_bits_at::<<#sf_storage_type as ZoruaBitField>::BitRepr>(#sf_offset);
-                            <#sf_storage_type as ZoruaBitField>::from_bit_repr(bit_repr)
-                        }
-
-                        #(#sf_attrs)*
-                        #sf_vis fn #sf_setter(&mut self, val: #sf_storage_type) {
-                            let bit_repr = val.to_bit_repr();
-                            self.#container_raw_name.set_bits_at::<<#sf_storage_type as ZoruaBitField>::BitRepr>(bit_repr, #sf_offset);
-                        }
-                    }
-                }
-            }).collect::<Vec<_>>()
+                })
+            })
         })
-    }).flatten().collect();
+        .flatten()
+        .collect();
 
     let output = quote! {
         #(#attrs)*
-        #vis struct #name #generics {
+        #vis struct #name #generics #where_clause {
             #(#field_defs),*
         }
 

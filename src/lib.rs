@@ -11,6 +11,7 @@ pub mod prelude {
     pub use crate::traits::*;
     pub use paste::paste;
 
+    pub use zorua_macro::ZoruaNative;
     pub use zorua_macro::bitfields;
 
     /// Shorthand for the [`AlignedBytes`] type with the same size and
