@@ -730,12 +730,14 @@ use syn::{
     punctuated::Punctuated,
 };
 
-/// A field in the zorua struct
+/// A field in the zorua struct, which may have native conversion syntax
 struct ZoruaField {
     attrs: Vec<Attribute>,
     vis: Visibility,
     name: Ident,
-    ty: Type,
+    native_type: Type,
+    storage_type: Type, // Same as native_type if no `as` clause
+    has_backing_type: bool,
     bitfield_subfields: Option<Vec<BitfieldSubfield>>,
 }
 
@@ -753,7 +755,49 @@ impl Parse for ZoruaField {
         let vis: Visibility = input.parse()?;
         let name: Ident = input.parse()?;
         input.parse::<Token![:]>()?;
-        let ty: Type = input.parse()?;
+
+        // Parse the native type by collecting tokens until we hit `as`, `{`, or end
+        // We can't use Type::parse() because it doesn't handle `as` keyword properly
+        let mut native_type_tokens = proc_macro2::TokenStream::new();
+        let mut depth = 0; // Track <> nesting
+
+        loop {
+            if input.is_empty() {
+                break;
+            }
+
+            // Check for terminators (at depth 0)
+            if depth == 0 {
+                if input.peek(Token![as]) || input.peek(syn::token::Brace) || input.peek(Token![,])
+                {
+                    break;
+                }
+            }
+
+            // Track <> nesting for generics like Fallible<Language, u8>
+            if input.peek(Token![<]) {
+                depth += 1;
+            } else if input.peek(Token![>]) {
+                depth -= 1;
+            }
+
+            // Consume next token
+            let tt: proc_macro2::TokenTree = input.parse()?;
+            native_type_tokens.extend(std::iter::once(tt));
+        }
+
+        let native_type: Type = syn::parse2(native_type_tokens.clone()).map_err(|e| {
+            syn::Error::new(name.span(), format!("Failed to parse native type: {}", e))
+        })?;
+
+        // Check for `as StorageType`
+        let (storage_type, has_backing_type) = if input.peek(Token![as]) {
+            input.parse::<Token![as]>()?;
+            let storage: Type = input.parse()?;
+            (storage, true)
+        } else {
+            (native_type.clone(), false)
+        };
 
         // Check for bitfield subfields { ... }
         let bitfield_subfields = if input.peek(syn::token::Brace) {
@@ -770,7 +814,9 @@ impl Parse for ZoruaField {
             attrs,
             vis,
             name,
-            ty,
+            native_type,
+            storage_type,
+            has_backing_type,
             bitfield_subfields,
         })
     }
@@ -903,25 +949,81 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
 
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-    // Generate field definitions
+    // Generate field definitions with _raw suffix for backed fields
     let field_defs: Vec<_> = fields
         .iter()
         .map(|f| {
             let field_attrs = &f.attrs;
             let field_vis = &f.vis;
-            let field_name = &f.name;
-            let field_type = &f.ty;
+            let field_name = if f.has_backing_type {
+                syn::Ident::new(&format!("{}_raw", f.name), f.name.span())
+            } else {
+                f.name.clone()
+            };
+            let storage_type = &f.storage_type;
             quote! {
                 #(#field_attrs)*
-                #field_vis #field_name: #field_type
+                #field_vis #field_name: #storage_type
             }
         })
         .collect();
 
+    // Generate field accessors (getter and setter) ONLY for backed fields (those with `as BackingType`)
+    // Regular fields (no `as`) just get direct access
+    let accessors: Vec<_> = fields.iter().filter(|f| f.has_backing_type).map(|f| {
+        let field_attrs = &f.attrs;
+        let field_vis = &f.vis;
+        let getter_name = &f.name;
+        let setter_name = syn::Ident::new(&format!("set_{}", f.name), f.name.span());
+        let raw_name = syn::Ident::new(&format!("{}_raw", f.name), f.name.span());
+        let native_type = &f.native_type;
+        let storage_type = &f.storage_type;
+
+        // Check if both types are arrays - if so, generate element-wise conversion
+        if let (Type::Array(native_arr), Type::Array(storage_arr)) = (native_type, storage_type) {
+            let native_elem = &native_arr.elem;
+            let storage_elem = &storage_arr.elem;
+
+            // Non-fallible array field: getter returns array with element-wise conversion
+            quote! {
+                #(#field_attrs)*
+                #[doc = concat!("Get the [`", stringify!(#native_type), "`] value from the `", stringify!(#raw_name), "` field.")]
+                #field_vis fn #getter_name(&self) -> #native_type {
+                    self.#raw_name.clone().map(|s| <#native_elem as ZoruaNative<#storage_elem>>::from_storage(s))
+                }
+
+                #(#field_attrs)*
+                #[doc = concat!("Set the `", stringify!(#raw_name), "` field from a [`", stringify!(#native_type), "`] value.")]
+                #field_vis fn #setter_name(&mut self, val: #native_type) {
+                    self.#raw_name = val.map(|n| <#native_elem as ZoruaNative<#storage_elem>>::to_storage(n));
+                }
+            }
+        } else {
+            // Non-fallible field: getter returns NativeType directly (via ZoruaNative)
+            quote! {
+                #(#field_attrs)*
+                #[doc = concat!("Get the [`", stringify!(#native_type), "`] value from the `", stringify!(#raw_name), "` field.")]
+                #field_vis fn #getter_name(&self) -> #native_type {
+                    <#native_type as ZoruaNative<#storage_type>>::from_storage(self.#raw_name.clone())
+                }
+
+                #(#field_attrs)*
+                #[doc = concat!("Set the `", stringify!(#raw_name), "` field from a [`", stringify!(#native_type), "`] value.")]
+                #field_vis fn #setter_name(&mut self, val: #native_type) {
+                    self.#raw_name = <#native_type as ZoruaNative<#storage_type>>::to_storage(val);
+                }
+            }
+        }
+    }).collect();
+
     // Generate bitfield subfield accessors
     let bitfield_accessors: Vec<_> = fields.iter().filter_map(|f| {
         f.bitfield_subfields.as_ref().map(|subfields| {
-            let container_name = &f.name;
+            let container_raw_name = if f.has_backing_type {
+                syn::Ident::new(&format!("{}_raw", f.name), f.name.span())
+            } else {
+                f.name.clone()
+            };
 
             subfields.iter().map(|sf| {
                 let sf_attrs = &sf.attrs;
@@ -942,7 +1044,7 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                         #sf_vis fn #sf_name(&self, index: usize) -> #elem {
                             let bit_len = <#elem as ZoruaBitField>::BitRepr::BITS as usize;
                             let offset = #sf_offset + (bit_len * index);
-                            let bit_repr = self.#container_name.get_bits_at::<<#elem as ZoruaBitField>::BitRepr>(offset);
+                            let bit_repr = self.#container_raw_name.get_bits_at::<<#elem as ZoruaBitField>::BitRepr>(offset);
                             <#elem as ZoruaBitField>::from_bit_repr(bit_repr)
                         }
 
@@ -951,7 +1053,7 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                             let bit_repr = val.to_bit_repr();
                             let bit_len = <#elem as ZoruaBitField>::BitRepr::BITS as usize;
                             let offset = #sf_offset + (bit_len * index);
-                            self.#container_name.set_bits_at::<<#elem as ZoruaBitField>::BitRepr>(bit_repr, offset);
+                            self.#container_raw_name.set_bits_at::<<#elem as ZoruaBitField>::BitRepr>(bit_repr, offset);
                         }
                     }
                 } else {
@@ -959,14 +1061,14 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                     quote! {
                         #(#sf_attrs)*
                         #sf_vis fn #sf_name(&self) -> #sf_type {
-                            let bit_repr = self.#container_name.get_bits_at::<<#sf_type as ZoruaBitField>::BitRepr>(#sf_offset);
+                            let bit_repr = self.#container_raw_name.get_bits_at::<<#sf_type as ZoruaBitField>::BitRepr>(#sf_offset);
                             <#sf_type as ZoruaBitField>::from_bit_repr(bit_repr)
                         }
 
                         #(#sf_attrs)*
                         #sf_vis fn #sf_setter(&mut self, val: #sf_type) {
                             let bit_repr = val.to_bit_repr();
-                            self.#container_name.set_bits_at::<<#sf_type as ZoruaBitField>::BitRepr>(bit_repr, #sf_offset);
+                            self.#container_raw_name.set_bits_at::<<#sf_type as ZoruaBitField>::BitRepr>(bit_repr, #sf_offset);
                         }
                     }
                 }
@@ -981,6 +1083,7 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
         }
 
         impl #impl_generics #name #ty_generics #where_clause {
+            #(#accessors)*
             #(#bitfield_accessors)*
         }
     };
