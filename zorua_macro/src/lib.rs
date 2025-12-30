@@ -544,7 +544,8 @@ struct ZoruaField {
     native_type: Type,
     storage_type: Type, // Same as native_type if no `as` clause
     has_backing_type: bool,
-    is_fallible: bool, // #[fallible] attribute present
+    is_fallible: bool,     // #[fallible] attribute present
+    is_zeroedoption: bool, // #[zeroedoption] attribute present
     bitfield_subfields: Option<Vec<BitfieldSubfield>>,
 }
 
@@ -555,7 +556,8 @@ struct BitfieldSubfield {
     native_type: proc_macro2::TokenStream,
     storage_type: proc_macro2::TokenStream, // Same as native_type if no `as` clause
     has_backing_type: bool,
-    is_fallible: bool, // #[fallible] attribute present
+    is_fallible: bool,     // #[fallible] attribute present
+    is_zeroedoption: bool, // #[zeroedoption] attribute present
     bit_offset: LitInt,
 }
 
@@ -565,10 +567,12 @@ impl Parse for ZoruaField {
 
         // Check for and extract field-level attributes
         let is_fallible = all_attrs.iter().any(|a| a.path().is_ident("fallible"));
+        let is_zeroedoption = all_attrs.iter().any(|a| a.path().is_ident("zeroedoption"));
+
         // Filter out processed attributes - they shouldn't appear in generated code
         let attrs: Vec<_> = all_attrs
             .into_iter()
-            .filter(|a| !a.path().is_ident("fallible"))
+            .filter(|a| !a.path().is_ident("fallible") && !a.path().is_ident("zeroedoption"))
             .collect();
 
         let vis: Visibility = input.parse()?;
@@ -637,6 +641,7 @@ impl Parse for ZoruaField {
             storage_type,
             has_backing_type,
             is_fallible,
+            is_zeroedoption,
             bitfield_subfields,
         })
     }
@@ -648,10 +653,12 @@ impl Parse for BitfieldSubfield {
 
         // Check for and extract field-level attributes
         let is_fallible = all_attrs.iter().any(|a| a.path().is_ident("fallible"));
+        let is_zeroedoption = all_attrs.iter().any(|a| a.path().is_ident("zeroedoption"));
+
         // Filter out processed attributes - they shouldn't appear in generated code
         let attrs: Vec<_> = all_attrs
             .into_iter()
-            .filter(|a| !a.path().is_ident("fallible"))
+            .filter(|a| !a.path().is_ident("fallible") && !a.path().is_ident("zeroedoption"))
             .collect();
 
         let vis: Visibility = input.parse()?;
@@ -732,6 +739,7 @@ impl Parse for BitfieldSubfield {
             storage_type,
             has_backing_type,
             is_fallible,
+            is_zeroedoption,
             bit_offset,
         })
     }
@@ -907,7 +915,39 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                         let sf_raw_name = syn::Ident::new(&format!("{}_raw", sf.name), sf.name.span());
                         let sf_raw_setter = syn::Ident::new(&format!("set_{}_raw", sf.name), sf.name.span());
 
-                        if sf.is_fallible {
+                        if sf.is_zeroedoption {
+                            // Non-fallible zeroedoption accessor: returns Option<NativeType>
+                            quote! {
+                                #(#sf_attrs)*
+                                #sf_vis fn #sf_name(&self) -> Option<#sf_native_type> {
+                                    let storage_val = self.#sf_raw_name();
+                                    if storage_val == Default::default() {
+                                        None
+                                    } else {
+                                        Some(<#sf_native_type as ZoruaNative<#sf_storage_type>>::from_storage(storage_val))
+                                    }
+                                }
+
+                                #(#sf_attrs)*
+                                #sf_vis fn #sf_setter(&mut self, val: Option<#sf_native_type>) {
+                                    let storage_val = match val {
+                                        None => Default::default(),
+                                        Some(v) => <#sf_native_type as ZoruaNative<#sf_storage_type>>::to_storage(v),
+                                    };
+                                    self.#sf_raw_setter(storage_val);
+                                }
+
+                                #(#sf_attrs)*
+                                #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
+                                    self.#container_raw_name.get_bits_at::<#sf_storage_type>(#sf_offset)
+                                }
+
+                                #(#sf_attrs)*
+                                #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
+                                    self.#container_raw_name.set_bits_at::<#sf_storage_type>(val, #sf_offset);
+                                }
+                            }
+                        } else if sf.is_fallible {
                             quote! {
                                 // Fallible aliased getter - returns Result<NativeType, StorageType>
                                 #(#sf_attrs)*
