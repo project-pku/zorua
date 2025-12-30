@@ -745,7 +745,9 @@ struct BitfieldSubfield {
     attrs: Vec<Attribute>,
     vis: Visibility,
     name: Ident,
-    ty: proc_macro2::TokenStream,
+    native_type: proc_macro2::TokenStream,
+    storage_type: proc_macro2::TokenStream, // Same as native_type if no `as` clause
+    has_backing_type: bool,
     bit_offset: LitInt,
 }
 
@@ -829,8 +831,8 @@ impl Parse for BitfieldSubfield {
         let name: Ident = input.parse()?;
         input.parse::<Token![:]>()?;
 
-        // Parse the type - collect tokens until we hit @
-        let mut ty_tokens = proc_macro2::TokenStream::new();
+        // Parse the type - collect tokens until we hit @ or `as`
+        let mut native_type_tokens = proc_macro2::TokenStream::new();
         let mut depth = 0; // Track <> nesting
 
         loop {
@@ -838,12 +840,14 @@ impl Parse for BitfieldSubfield {
                 return Err(syn::Error::new(name.span(), "Expected @ after type"));
             }
 
-            // Check for @ at depth 0
-            if depth == 0 && input.peek(Token![@]) {
-                break;
+            // Check for terminators (at depth 0)
+            if depth == 0 {
+                if input.peek(Token![as]) || input.peek(Token![@]) {
+                    break;
+                }
             }
 
-            // Track <> nesting for generics
+            // Track <> nesting for generics like Result<Language, u8>
             if input.peek(Token![<]) {
                 depth += 1;
             } else if input.peek(Token![>]) {
@@ -852,8 +856,43 @@ impl Parse for BitfieldSubfield {
 
             // Consume next token
             let tt: proc_macro2::TokenTree = input.parse()?;
-            ty_tokens.extend(std::iter::once(tt));
+            native_type_tokens.extend(std::iter::once(tt));
         }
+
+        // Check for `as StorageType`
+        let (storage_type, has_backing_type) = if input.peek(Token![as]) {
+            input.parse::<Token![as]>()?;
+
+            // Parse storage type tokens until @
+            let mut storage_tokens = proc_macro2::TokenStream::new();
+            let mut depth = 0;
+
+            loop {
+                if input.is_empty() {
+                    return Err(syn::Error::new(
+                        name.span(),
+                        "Expected @ after storage type",
+                    ));
+                }
+
+                if depth == 0 && input.peek(Token![@]) {
+                    break;
+                }
+
+                if input.peek(Token![<]) {
+                    depth += 1;
+                } else if input.peek(Token![>]) {
+                    depth -= 1;
+                }
+
+                let tt: proc_macro2::TokenTree = input.parse()?;
+                storage_tokens.extend(std::iter::once(tt));
+            }
+
+            (storage_tokens, true)
+        } else {
+            (native_type_tokens.clone(), false)
+        };
 
         input.parse::<Token![@]>()?;
         let bit_offset: LitInt = input.parse()?;
@@ -862,7 +901,9 @@ impl Parse for BitfieldSubfield {
             attrs,
             vis,
             name,
-            ty: ty_tokens,
+            native_type: native_type_tokens,
+            storage_type,
+            has_backing_type,
             bit_offset,
         })
     }
@@ -1030,45 +1071,127 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                 let sf_vis = &sf.vis;
                 let sf_name = &sf.name;
                 let sf_setter = syn::Ident::new(&format!("set_{}", sf.name), sf.name.span());
-                let sf_type = &sf.ty;
+                let sf_native_type = &sf.native_type;
+                let sf_storage_type = &sf.storage_type;
                 let sf_offset = &sf.bit_offset;
 
-                // Parse type to check if it's an array [T; N]
-                let type_result: Result<Type, _> = syn::parse2(sf_type.clone());
+                // Parse storage type to check if it's an array [T; N]
+                let storage_type: Type = syn::parse2(sf_storage_type.clone()).expect("Failed to parse subfield storage type");
 
-                if let Ok(Type::Array(type_array)) = type_result {
+                if let Type::Array(type_array) = storage_type {
                     let elem = &type_array.elem;
                     // Array bitfield: generate indexed accessors
+                    if sf.has_backing_type {
+                        // Parse native type array element
+                        let native_type: Type = syn::parse2(sf_native_type.clone()).expect("Failed to parse subfield native type");
+                        if let Type::Array(native_array) = native_type {
+                            let native_elem = &native_array.elem;
+                            let sf_raw_name = syn::Ident::new(&format!("{}_raw", sf.name), sf.name.span());
+                            let sf_raw_setter = syn::Ident::new(&format!("set_{}_raw", sf.name), sf.name.span());
+                            
+                            quote! {
+                                // Aliased getter - returns NativeType via ZoruaNative
+                                #(#sf_attrs)*
+                                #sf_vis fn #sf_name(&self, index: usize) -> #native_elem {
+                                    let storage_val = self.#sf_raw_name(index);
+                                    <#native_elem as ZoruaNative<#elem>>::from_storage(storage_val)
+                                }
+
+                                // Aliased setter
+                                #(#sf_attrs)*
+                                #sf_vis fn #sf_setter(&mut self, val: #native_elem, index: usize) {
+                                    let storage_val = <#native_elem as ZoruaNative<#elem>>::to_storage(val);
+                                    self.#sf_raw_setter(storage_val, index);
+                                }
+
+                                // Raw getter - returns StorageType directly
+                                #(#sf_attrs)*
+                                #sf_vis fn #sf_raw_name(&self, index: usize) -> #elem {
+                                    let bit_len = <#elem as ZoruaBitField>::BitRepr::BITS as usize;
+                                    let offset = #sf_offset + (bit_len * index);
+                                    let bit_repr = self.#container_raw_name.get_bits_at::<<#elem as ZoruaBitField>::BitRepr>(offset);
+                                    <#elem as ZoruaBitField>::from_bit_repr(bit_repr)
+                                }
+
+                                // Raw setter
+                                #(#sf_attrs)*
+                                #sf_vis fn #sf_raw_setter(&mut self, val: #elem, index: usize) {
+                                    let bit_repr = val.to_bit_repr();
+                                    let bit_len = <#elem as ZoruaBitField>::BitRepr::BITS as usize;
+                                    let offset = #sf_offset + (bit_len * index);
+                                    self.#container_raw_name.set_bits_at::<<#elem as ZoruaBitField>::BitRepr>(bit_repr, offset);
+                                }
+                            }
+                        } else {
+                            panic!("Bitfield subfield with `as` syntax: native type must also be an array if storage type is an array");
+                        }
+                    } else {
+                        // Non-aliased array bitfield
+                        quote! {
+                            #(#sf_attrs)*
+                            #sf_vis fn #sf_name(&self, index: usize) -> #elem {
+                                let bit_len = <#elem as ZoruaBitField>::BitRepr::BITS as usize;
+                                let offset = #sf_offset + (bit_len * index);
+                                let bit_repr = self.#container_raw_name.get_bits_at::<<#elem as ZoruaBitField>::BitRepr>(offset);
+                                <#elem as ZoruaBitField>::from_bit_repr(bit_repr)
+                            }
+
+                            #(#sf_attrs)*
+                            #sf_vis fn #sf_setter(&mut self, val: #elem, index: usize) {
+                                let bit_repr = val.to_bit_repr();
+                                let bit_len = <#elem as ZoruaBitField>::BitRepr::BITS as usize;
+                                let offset = #sf_offset + (bit_len * index);
+                                self.#container_raw_name.set_bits_at::<<#elem as ZoruaBitField>::BitRepr>(bit_repr, offset);
+                            }
+                        }
+                    }
+                } else if sf.has_backing_type {
+                    // Aliased bitfield subfield: generate both aliased and _raw accessors
+                    let sf_raw_name = syn::Ident::new(&format!("{}_raw", sf.name), sf.name.span());
+                    let sf_raw_setter = syn::Ident::new(&format!("set_{}_raw", sf.name), sf.name.span());
+                    
                     quote! {
+                        // Aliased getter - returns NativeType via ZoruaNative
                         #(#sf_attrs)*
-                        #sf_vis fn #sf_name(&self, index: usize) -> #elem {
-                            let bit_len = <#elem as ZoruaBitField>::BitRepr::BITS as usize;
-                            let offset = #sf_offset + (bit_len * index);
-                            let bit_repr = self.#container_raw_name.get_bits_at::<<#elem as ZoruaBitField>::BitRepr>(offset);
-                            <#elem as ZoruaBitField>::from_bit_repr(bit_repr)
+                        #sf_vis fn #sf_name(&self) -> #sf_native_type {
+                            let storage_val = self.#sf_raw_name();
+                            <#sf_native_type as ZoruaNative<#sf_storage_type>>::from_storage(storage_val)
                         }
 
+                        // Aliased setter
                         #(#sf_attrs)*
-                        #sf_vis fn #sf_setter(&mut self, val: #elem, index: usize) {
+                        #sf_vis fn #sf_setter(&mut self, val: #sf_native_type) {
+                            let storage_val = <#sf_native_type as ZoruaNative<#sf_storage_type>>::to_storage(val);
+                            self.#sf_raw_setter(storage_val);
+                        }
+
+                        // Raw getter - returns StorageType directly
+                        #(#sf_attrs)*
+                        #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
+                            let bit_repr = self.#container_raw_name.get_bits_at::<<#sf_storage_type as ZoruaBitField>::BitRepr>(#sf_offset);
+                            <#sf_storage_type as ZoruaBitField>::from_bit_repr(bit_repr)
+                        }
+
+                        // Raw setter
+                        #(#sf_attrs)*
+                        #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
                             let bit_repr = val.to_bit_repr();
-                            let bit_len = <#elem as ZoruaBitField>::BitRepr::BITS as usize;
-                            let offset = #sf_offset + (bit_len * index);
-                            self.#container_raw_name.set_bits_at::<<#elem as ZoruaBitField>::BitRepr>(bit_repr, offset);
+                            self.#container_raw_name.set_bits_at::<<#sf_storage_type as ZoruaBitField>::BitRepr>(bit_repr, #sf_offset);
                         }
                     }
                 } else {
-                    // Non-array bitfield: generate simple value accessors
+                    // Standard bitfield subfield (no `as`): generate simple value accessors
                     quote! {
                         #(#sf_attrs)*
-                        #sf_vis fn #sf_name(&self) -> #sf_type {
-                            let bit_repr = self.#container_raw_name.get_bits_at::<<#sf_type as ZoruaBitField>::BitRepr>(#sf_offset);
-                            <#sf_type as ZoruaBitField>::from_bit_repr(bit_repr)
+                        #sf_vis fn #sf_name(&self) -> #sf_storage_type {
+                            let bit_repr = self.#container_raw_name.get_bits_at::<<#sf_storage_type as ZoruaBitField>::BitRepr>(#sf_offset);
+                            <#sf_storage_type as ZoruaBitField>::from_bit_repr(bit_repr)
                         }
 
                         #(#sf_attrs)*
-                        #sf_vis fn #sf_setter(&mut self, val: #sf_type) {
+                        #sf_vis fn #sf_setter(&mut self, val: #sf_storage_type) {
                             let bit_repr = val.to_bit_repr();
-                            self.#container_raw_name.set_bits_at::<<#sf_type as ZoruaBitField>::BitRepr>(bit_repr, #sf_offset);
+                            self.#container_raw_name.set_bits_at::<<#sf_storage_type as ZoruaBitField>::BitRepr>(bit_repr, #sf_offset);
                         }
                     }
                 }
