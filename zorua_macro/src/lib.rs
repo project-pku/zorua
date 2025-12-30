@@ -719,3 +719,271 @@ fn generate_field_checks(fields: &Fields) -> proc_macro2::TokenStream {
 
     field_checks
 }
+
+// ============================================================================
+// bitfields! proc macro for struct transformation
+// ============================================================================
+
+use syn::{
+    Ident, Token, Visibility, braced,
+    parse::{Parse, ParseStream},
+    punctuated::Punctuated,
+};
+
+/// A field in the zorua struct
+struct ZoruaField {
+    attrs: Vec<Attribute>,
+    vis: Visibility,
+    name: Ident,
+    ty: Type,
+    bitfield_subfields: Option<Vec<BitfieldSubfield>>,
+}
+
+struct BitfieldSubfield {
+    attrs: Vec<Attribute>,
+    vis: Visibility,
+    name: Ident,
+    ty: proc_macro2::TokenStream,
+    bit_offset: LitInt,
+}
+
+impl Parse for ZoruaField {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let attrs = input.call(Attribute::parse_outer)?;
+        let vis: Visibility = input.parse()?;
+        let name: Ident = input.parse()?;
+        input.parse::<Token![:]>()?;
+        let ty: Type = input.parse()?;
+
+        // Check for bitfield subfields { ... }
+        let bitfield_subfields = if input.peek(syn::token::Brace) {
+            let content;
+            braced!(content in input);
+            let subfields: Punctuated<BitfieldSubfield, Token![,]> =
+                content.parse_terminated(BitfieldSubfield::parse, Token![,])?;
+            Some(subfields.into_iter().collect())
+        } else {
+            None
+        };
+
+        Ok(ZoruaField {
+            attrs,
+            vis,
+            name,
+            ty,
+            bitfield_subfields,
+        })
+    }
+}
+
+impl Parse for BitfieldSubfield {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let attrs = input.call(Attribute::parse_outer)?;
+        let vis: Visibility = input.parse()?;
+        let name: Ident = input.parse()?;
+        input.parse::<Token![:]>()?;
+
+        // Parse the type - collect tokens until we hit @
+        let mut ty_tokens = proc_macro2::TokenStream::new();
+        let mut depth = 0; // Track <> nesting
+
+        loop {
+            if input.is_empty() {
+                return Err(syn::Error::new(name.span(), "Expected @ after type"));
+            }
+
+            // Check for @ at depth 0
+            if depth == 0 && input.peek(Token![@]) {
+                break;
+            }
+
+            // Track <> nesting for generics
+            if input.peek(Token![<]) {
+                depth += 1;
+            } else if input.peek(Token![>]) {
+                depth -= 1;
+            }
+
+            // Consume next token
+            let tt: proc_macro2::TokenTree = input.parse()?;
+            ty_tokens.extend(std::iter::once(tt));
+        }
+
+        input.parse::<Token![@]>()?;
+        let bit_offset: LitInt = input.parse()?;
+
+        Ok(BitfieldSubfield {
+            attrs,
+            vis,
+            name,
+            ty: ty_tokens,
+            bit_offset,
+        })
+    }
+}
+
+struct ZoruaStruct {
+    attrs: Vec<Attribute>,
+    vis: Visibility,
+    name: Ident,
+    generics: syn::Generics,
+    fields: Vec<ZoruaField>,
+}
+
+impl Parse for ZoruaStruct {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let attrs = input.call(Attribute::parse_outer)?;
+        let vis: Visibility = input.parse()?;
+        input.parse::<Token![struct]>()?;
+        let name: Ident = input.parse()?;
+        let generics: syn::Generics = input.parse()?;
+
+        let content;
+        braced!(content in input);
+        let fields: Punctuated<ZoruaField, Token![,]> =
+            content.parse_terminated(ZoruaField::parse, Token![,])?;
+
+        Ok(ZoruaStruct {
+            attrs,
+            vis,
+            name,
+            generics,
+            fields: fields.into_iter().collect(),
+        })
+    }
+}
+
+/// The `bitfields!` proc macro transforms a struct with zorua field syntax.
+///
+/// # Field Syntax
+///
+/// - Regular field: `pub field: Type`
+///
+/// - Bitfield container: `field: Type { subfield: SubType@bit_offset, ... }`
+///
+/// # Example
+///
+/// ```ignore
+/// bitfields! {
+///     #[repr(C)]
+///     #[derive(ZoruaField, Clone, Debug)]
+///     pub struct Pokemon {
+///         pub pid: u32_le,
+///         pub tid: u32_le,
+///         flags: u8 {
+///             pub is_egg: bool@0,
+///             pub has_nickname: bool@1,
+///         },
+///     }
+/// }
+/// ```
+#[proc_macro]
+pub fn bitfields(item: TokenStream) -> TokenStream {
+    let input = match syn::parse::<ZoruaStruct>(item) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return e.into_compile_error().into();
+        }
+    };
+
+    match generate_zorua_struct(input) {
+        Ok(tokens) => tokens,
+        Err(e) => e.into_compile_error().into(),
+    }
+}
+
+fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> {
+    let ZoruaStruct {
+        attrs,
+        vis,
+        name,
+        generics,
+        fields,
+    } = input;
+
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+    // Generate field definitions
+    let field_defs: Vec<_> = fields
+        .iter()
+        .map(|f| {
+            let field_attrs = &f.attrs;
+            let field_vis = &f.vis;
+            let field_name = &f.name;
+            let field_type = &f.ty;
+            quote! {
+                #(#field_attrs)*
+                #field_vis #field_name: #field_type
+            }
+        })
+        .collect();
+
+    // Generate bitfield subfield accessors
+    let bitfield_accessors: Vec<_> = fields.iter().filter_map(|f| {
+        f.bitfield_subfields.as_ref().map(|subfields| {
+            let container_name = &f.name;
+
+            subfields.iter().map(|sf| {
+                let sf_attrs = &sf.attrs;
+                let sf_vis = &sf.vis;
+                let sf_name = &sf.name;
+                let sf_setter = syn::Ident::new(&format!("set_{}", sf.name), sf.name.span());
+                let sf_type = &sf.ty;
+                let sf_offset = &sf.bit_offset;
+
+                // Parse type to check if it's an array [T; N]
+                let type_result: Result<Type, _> = syn::parse2(sf_type.clone());
+
+                if let Ok(Type::Array(type_array)) = type_result {
+                    let elem = &type_array.elem;
+                    // Array bitfield: generate indexed accessors
+                    quote! {
+                        #(#sf_attrs)*
+                        #sf_vis fn #sf_name(&self, index: usize) -> #elem {
+                            let bit_len = <#elem as ZoruaBitField>::BitRepr::BITS as usize;
+                            let offset = #sf_offset + (bit_len * index);
+                            let bit_repr = self.#container_name.get_bits_at::<<#elem as ZoruaBitField>::BitRepr>(offset);
+                            <#elem as ZoruaBitField>::from_bit_repr(bit_repr)
+                        }
+
+                        #(#sf_attrs)*
+                        #sf_vis fn #sf_setter(&mut self, val: #elem, index: usize) {
+                            let bit_repr = val.to_bit_repr();
+                            let bit_len = <#elem as ZoruaBitField>::BitRepr::BITS as usize;
+                            let offset = #sf_offset + (bit_len * index);
+                            self.#container_name.set_bits_at::<<#elem as ZoruaBitField>::BitRepr>(bit_repr, offset);
+                        }
+                    }
+                } else {
+                    // Non-array bitfield: generate simple value accessors
+                    quote! {
+                        #(#sf_attrs)*
+                        #sf_vis fn #sf_name(&self) -> #sf_type {
+                            let bit_repr = self.#container_name.get_bits_at::<<#sf_type as ZoruaBitField>::BitRepr>(#sf_offset);
+                            <#sf_type as ZoruaBitField>::from_bit_repr(bit_repr)
+                        }
+
+                        #(#sf_attrs)*
+                        #sf_vis fn #sf_setter(&mut self, val: #sf_type) {
+                            let bit_repr = val.to_bit_repr();
+                            self.#container_name.set_bits_at::<<#sf_type as ZoruaBitField>::BitRepr>(bit_repr, #sf_offset);
+                        }
+                    }
+                }
+            }).collect::<Vec<_>>()
+        })
+    }).flatten().collect();
+
+    let output = quote! {
+        #(#attrs)*
+        #vis struct #name #generics {
+            #(#field_defs),*
+        }
+
+        impl #impl_generics #name #ty_generics #where_clause {
+            #(#bitfield_accessors)*
+        }
+    };
+
+    Ok(output.into())
+}
