@@ -54,7 +54,7 @@ macro_rules! define_endian_int {
     ($name:ident, $primitive:ty) => {
         /// An endian-aware wrapper around a primitive integer type
         #[repr(transparent)]
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name<E: Endian> {
             bytes: [u8; core::mem::size_of::<$primitive>()],
             _endian: PhantomData<E>,
