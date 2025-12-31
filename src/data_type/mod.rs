@@ -1,10 +1,7 @@
-mod aligned_bytes;
 mod endian;
 mod fallible;
 mod unaligned;
 
-pub use aligned_bytes::*;
-pub use elain::{Align, Alignment};
 pub use endian::*;
 pub use fallible::*;
 pub use unaligned::*;
