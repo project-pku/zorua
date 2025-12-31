@@ -97,8 +97,7 @@ fn impl_zoruafield_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStrea
         return Err(syn::Error::new_spanned(
             &ast.ident,
             format!(
-                "Enums must have exactly 256 variants to derive ZoruaField (found {}). \
-                Did you mean to derive ZoruaBitField?",
+                "Enums must have exactly 256 variants to derive ZoruaField (found {}).",
                 data.variants.len()
             ),
         ));
@@ -370,6 +369,14 @@ fn is_primitive(ty: &Type) -> bool {
     false
 }
 
+fn deconstruct_array(ty: &Type) -> Option<&Type> {
+    if let Type::Array(ta) = ty {
+        Some(&*ta.elem)
+    } else {
+        None
+    }
+}
+
 fn generate_impl(
     ty: &str,
     is_unsafe: bool,
@@ -544,8 +551,6 @@ struct ZoruaField {
     native_type: Type,
     storage_type: Type, // Same as native_type if no `as` clause
     has_backing_type: bool,
-    is_fallible: bool,     // #[fallible] attribute present
-    is_zeroedoption: bool, // #[zeroedoption] attribute present
     bitfield_subfields: Option<Vec<BitfieldSubfield>>,
 }
 
@@ -564,10 +569,6 @@ struct BitfieldSubfield {
 impl Parse for ZoruaField {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let all_attrs = input.call(Attribute::parse_outer)?;
-
-        // Check for and extract field-level attributes
-        let is_fallible = all_attrs.iter().any(|a| a.path().is_ident("fallible"));
-        let is_zeroedoption = all_attrs.iter().any(|a| a.path().is_ident("zeroedoption"));
 
         // Filter out processed attributes - they shouldn't appear in generated code
         let attrs: Vec<_> = all_attrs
@@ -640,8 +641,6 @@ impl Parse for ZoruaField {
             native_type,
             storage_type,
             has_backing_type,
-            is_fallible,
-            is_zeroedoption,
             bitfield_subfields,
         })
     }
@@ -860,19 +859,41 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
             let field_native_type = &f.native_type;
             let field_storage_type = &f.storage_type;
 
+            let (getter_body, setter_body) = if let (Some(native_elem), Some(storage_elem)) = (deconstruct_array(field_native_type), deconstruct_array(field_storage_type)) {
+                (
+                    quote! {
+                        let storage_vals = self.#field_raw_name();
+                        storage_vals.map(|s| <#native_elem as ZoruaNative<#storage_elem>>::from_storage(s))
+                    },
+                    quote! {
+                        let storage_vals = val.map(|v| <#native_elem as ZoruaNative<#storage_elem>>::to_storage(v));
+                        self.#field_raw_setter(storage_vals);
+                    }
+                )
+            } else {
+                (
+                    quote! {
+                        let storage_val = self.#field_raw_name();
+                        <#field_native_type as ZoruaNative<#field_storage_type>>::from_storage(storage_val)
+                    },
+                    quote! {
+                        let storage_val = <#field_native_type as ZoruaNative<#field_storage_type>>::to_storage(val);
+                        self.#field_raw_setter(storage_val);
+                    }
+                )
+            };
+
             quote! {
-                // Aliased getter - returns NativeType via ZoruaNative<StorageType>
+                // Aliased getter
                 #(#field_attrs)*
                 #field_vis fn #field_name(&self) -> #field_native_type {
-                    let storage_val = self.#field_raw_name();
-                    <#field_native_type as ZoruaNative<#field_storage_type>>::from_storage(storage_val)
+                    #getter_body
                 }
 
-                // Aliased setter - accepts NativeType
+                // Aliased setter
                 #(#field_attrs)*
                 #field_vis fn #field_setter(&mut self, val: #field_native_type) {
-                    let storage_val = <#field_native_type as ZoruaNative<#field_storage_type>>::to_storage(val);
-                    self.#field_raw_setter(storage_val);
+                    #setter_body
                 }
 
                 // Raw getter - returns StorageType directly

@@ -32,7 +32,6 @@
 //! ```
 
 use crate::data_type::Endian;
-use crate::traits::ZoruaField;
 
 /// A trait for types that use native representation internally but can be
 /// converted to/from endian-aware storage types for use in zorua structs.
@@ -224,30 +223,10 @@ macro_rules! impl_zorua_native_identity_primitive {
 }
 
 // u16, u32, u64 do not implement ZoruaField, so they need explicit identity impls to be used in bitfields.
-// u8 implements ZoruaField, so it's already covered by the blanket impl below.
-impl_zorua_native_identity_primitive!(u16, u32, u64);
+// Added u8 here as well after removing the blanket implementation.
+impl_zorua_native_identity_primitive!(u8, u16, u32, u64);
 
-// ============================================================================
-// Identity implementation - any ZoruaField type can be its own native type
-// ============================================================================
-
-/// Blanket implementation: any `ZoruaField` type can be used as its own native type.
-/// This is identity conversion - the getter just clones the field.
-///
-/// This allows syntax like `field: SomeType as SomeType` where no conversion is needed.
-impl<T: ZoruaField + Clone> ZoruaNative<T> for T {
-    const IS_FALLIBLE: bool = false;
-
-    #[inline]
-    fn try_from_storage(storage: T) -> Result<Self, T> {
-        Ok(storage)
-    }
-
-    #[inline]
-    fn to_storage(self) -> T {
-        self
-    }
-}
+// (Blanket implementation removed due to conflicts with explicit identity impls)
 
 #[cfg(test)]
 mod tests {
@@ -366,6 +345,26 @@ mod tests {
 
             // Direct field access (no _raw suffix for regular fields)
             assert_eq!(test.data.value(), 0x12345678);
+        }
+
+        bitfields! {
+            #[repr(C)]
+            #[derive(Clone, Debug, PartialEq, Default)]
+            struct TestArrayBitfield {
+                flags: u16_le {
+                    pub nibbles: [u4; 4]@0,
+                },
+            }
+        }
+
+        #[test]
+        fn test_array_bitfield_roundtrip() {
+            let mut test = TestArrayBitfield::default();
+            let vals = [u4::new(0xA), u4::new(0xB), u4::new(0xC), u4::new(0xD)];
+            test.set_nibbles(vals);
+
+            assert_eq!(test.nibbles(), vals);
+            assert_eq!(test.flags.value(), 0xDCBA);
         }
     }
 }
