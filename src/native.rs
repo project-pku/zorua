@@ -361,9 +361,17 @@ mod tests {
         fn test_array_bitfield_roundtrip() {
             let mut test = TestArrayBitfield::default();
             let vals = [u4::new(0xA), u4::new(0xB), u4::new(0xC), u4::new(0xD)];
-            test.set_nibbles(vals);
 
-            assert_eq!(test.nibbles(), vals);
+            // Set each element using indexed setter
+            for (i, &val) in vals.iter().enumerate() {
+                test.set_nibbles(i, val);
+            }
+
+            // Read back each element using indexed getter
+            for (i, &expected) in vals.iter().enumerate() {
+                assert_eq!(test.nibbles(i), expected);
+            }
+
             assert_eq!(test.flags.value(), 0xDCBA);
         }
     }
