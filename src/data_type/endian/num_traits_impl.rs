@@ -1,4 +1,4 @@
-use std::{
+use core::{
     fmt::Display,
     ops::{
         Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div,
@@ -288,7 +288,7 @@ macro_rules! impl_to_from_bytes {
     ($($t:ident => $primitive:ty),*) => {
         $(
             impl<E: Endian> ToBytes for $t<E> {
-                type Bytes = [u8; std::mem::size_of::<$primitive>()];
+                type Bytes = [u8; core::mem::size_of::<$primitive>()];
 
                 fn to_be_bytes(&self) -> Self::Bytes {
                     self.value().to_be_bytes()
@@ -300,7 +300,7 @@ macro_rules! impl_to_from_bytes {
             }
 
             impl<E: Endian> FromBytes for $t<E> {
-                type Bytes = [u8; std::mem::size_of::<$primitive>()];
+                type Bytes = [u8; core::mem::size_of::<$primitive>()];
 
                 fn from_be_bytes(bytes: &Self::Bytes) -> Self {
                     <Self as From<$primitive>>::from(<$primitive>::from_be_bytes(*bytes))
@@ -438,7 +438,7 @@ macro_rules! impl_display {
     ($($t:ident => $primitive:ty),*) => {
         $(
             impl<E: Endian> Display for $t<E> {
-                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                     Display::fmt(&self.value(), f)
                 }
             }

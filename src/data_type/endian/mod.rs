@@ -129,8 +129,8 @@ mod tests {
         assert_eq!(little_val.value(), 0x1234);
 
         // But their byte representations should be different - let's transmute the U16s to [u8; 2] and compare
-        let big_bytes: [u8; 2] = unsafe { std::mem::transmute(big_val) };
-        let little_bytes: [u8; 2] = unsafe { std::mem::transmute(little_val) };
+        let big_bytes: [u8; 2] = unsafe { core::mem::transmute(big_val) };
+        let little_bytes: [u8; 2] = unsafe { core::mem::transmute(little_val) };
         assert_ne!(big_bytes, little_bytes);
     }
 

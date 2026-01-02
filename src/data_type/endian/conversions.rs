@@ -2,7 +2,7 @@
 
 use super::*;
 
-use std::convert::TryFrom;
+use core::convert::TryFrom;
 
 // Macro to implement From for smaller unsigned types
 macro_rules! impl_from_smaller_unsigned {
@@ -30,7 +30,7 @@ macro_rules! impl_from_smaller_signed {
 macro_rules! impl_try_from {
     ($from:ty, $to:ident, $to_primitive:ty) => {
         impl<E: Endian> TryFrom<$from> for $to<E> {
-            type Error = std::num::TryFromIntError;
+            type Error = core::num::TryFromIntError;
 
             fn try_from(value: $from) -> Result<Self, Self::Error> {
                 <$to_primitive>::try_from(value).map(Self::from)
@@ -54,7 +54,7 @@ macro_rules! impl_from_endian_to_primitive {
 macro_rules! impl_try_from_endian_to_smaller {
     ($endian_type:ident, $from_primitive:ty, $to_primitive:ty) => {
         impl<E: Endian> TryFrom<$endian_type<E>> for $to_primitive {
-            type Error = std::num::TryFromIntError;
+            type Error = core::num::TryFromIntError;
 
             fn try_from(value: $endian_type<E>) -> Result<Self, Self::Error> {
                 <$to_primitive>::try_from(value.value())
@@ -174,7 +174,7 @@ impl_try_from!(u64, I64, i64);
 mod tests {
     use super::*;
 
-    use std::convert::TryInto;
+    use core::convert::TryInto;
 
     #[test]
     fn test_basic_conversions() {
