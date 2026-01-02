@@ -304,7 +304,7 @@ mod tests {
         // Test struct with backed field syntax (uses `as`)
         bitfields! {
             #[repr(C)]
-            #[derive(Clone, Debug, PartialEq)]
+            #[derive(ZoruaField, Clone, Debug, PartialEq)]
             struct TestNativeStruct {
                 pub pid: MyPid as u32_le,
                 pub data: u32_le,

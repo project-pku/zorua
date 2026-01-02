@@ -1,7 +1,7 @@
 ﻿use proc_macro::TokenStream;
-use quote::{quote, quote_spanned};
+use quote::quote;
 use syn::{
-    Attribute, Data, DataEnum, DataStruct, DataUnion, DeriveInput, Fields, LitInt, Type, token,
+    Attribute, Data, DataEnum, DataStruct, DeriveInput, LitInt, Type, token,
 };
 
 /// This derive macro works on structs and c-like enums.
@@ -17,7 +17,7 @@ use syn::{
 ///     fieldB: OtherZoruaField,
 /// }
 /// ```
-#[proc_macro_derive(ZoruaField, attributes(unsafe_confirm_no_padding))]
+#[proc_macro_derive(ZoruaField)]
 pub fn zoruafield_derive_macro(item: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(item).unwrap(); //parse
     let result = match &ast.data {
@@ -41,46 +41,12 @@ fn impl_zoruafield_struct(ast: &DeriveInput, data: &DataStruct) -> Result<TokenS
         ));
     }
 
-    let no_generics = ast.generics.params.is_empty();
-
-    let unsafe_confirm_no_padding = ast
-        .attrs
-        .iter()
-        .any(|attr| attr.path().is_ident("unsafe_confirm_no_padding"));
-
-    if !no_generics && !unsafe_confirm_no_padding {
-        return Err(syn::Error::new_spanned(
-            &ast.generics,
-            "Generic structs require manual verification that no padding exists due to layout. \
-            Confirm this by adding the `#[unsafe_confirm_no_padding]` attribute.",
-        ));
-    }
-
-    if no_generics && unsafe_confirm_no_padding {
-        return Err(syn::Error::new_spanned(
-            &ast.ident,
-            "The `#[unsafe_confirm_no_padding]` attribute can only be used with generic structs.",
-        ));
-    }
-
-    // Generate field validation checks
-    let field_checks = generate_field_checks(&data.fields);
-
     Ok(generate_impl(
         "ZoruaField",
         true,
         ast,
         None,
-        //NOTE: Allow packed structs to skip the padding check?
-        if no_generics {
-            let padding_check = generate_assert_no_padding(ast);
-            Some(quote! {
-                #field_checks
-                #padding_check
-            })
-        } else {
-            Some(field_checks)
-        },
+        None,
     ))
 }
 
@@ -470,68 +436,7 @@ fn get_repr_state(attrs: &[Attribute]) -> Result<ReprState, syn::Error> {
     })
 }
 
-fn get_field_types(fields: &Fields) -> impl Iterator<Item = &'_ Type> {
-    fields.iter().map(|field| &field.ty)
-}
 
-fn get_fields(input: &DeriveInput) -> Result<Fields, syn::Error> {
-    match &input.data {
-        Data::Struct(DataStruct { fields, .. }) => Ok(fields.clone()),
-        Data::Union(DataUnion { fields, .. }) => Ok(Fields::Named(fields.clone())),
-        Data::Enum(_) => Err(syn::Error::new_spanned(
-            input,
-            "get_fields does not support enums",
-        )),
-    }
-}
-
-fn generate_assert_no_padding(input: &DeriveInput) -> proc_macro2::TokenStream {
-    let struct_type = &input.ident;
-    let span = input.ident.span();
-    // Note: get_fields won't fail here since we only call this for structs
-    let fields = get_fields(input).unwrap();
-
-    let mut field_types = get_field_types(&fields);
-    let size_sum = if let Some(first) = field_types.next() {
-        let size_first = quote_spanned!(span => ::core::mem::size_of::<#first>());
-        let size_rest = quote_spanned!(span => #( + ::core::mem::size_of::<#field_types>() )*);
-        quote_spanned!(span => #size_first #size_rest)
-    } else {
-        quote_spanned!(span => 0)
-    };
-
-    //NOTE: This works but does not provide a very helpful error message...
-    quote! {
-        #[doc(hidden)]
-        const _ZORUA_PADDING_CHECK: fn() = || {
-            let _ = ::core::mem::transmute::<#struct_type, [u8; #size_sum]>;
-        };
-    }
-}
-
-fn generate_field_checks(fields: &Fields) -> proc_macro2::TokenStream {
-    let mut field_checks = quote! {};
-
-    for (i, field) in fields.iter().enumerate() {
-        let ty = &field.ty;
-        let const_name = syn::Ident::new(
-            &format!("_ZORUA_FIELD_CHECK_{i}"),
-            proc_macro2::Span::call_site(),
-        );
-
-        // Generate a compile-time assertion that the field implements ZoruaField
-        field_checks.extend(quote! {
-            #[doc(hidden)]
-            const #const_name: fn() = || {
-                // This will fail to compile if the field type doesn't implement ZoruaField
-                fn assert_zorua_field<T: ZoruaField>() {}
-                assert_zorua_field::<#ty>();
-            };
-        });
-    }
-
-    field_checks
-}
 
 // ============================================================================
 // bitfields! proc macro for struct transformation
