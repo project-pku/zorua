@@ -1,4 +1,4 @@
-use proc_macro::TokenStream;
+﻿use proc_macro::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::{
     Attribute, Data, DataEnum, DataStruct, DataUnion, DeriveInput, Fields, LitInt, Type, token,
@@ -865,7 +865,17 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
             let field_storage_type = &f.storage_type;
 
             let (getter, setter) = if let (Some(native_elem), Some(storage_elem)) = (deconstruct_array(field_native_type), deconstruct_array(field_storage_type)) {
-                let assertion = if f.is_fallible {
+                let is_identity = quote!(#native_elem).to_string() == quote!(#storage_elem).to_string();
+                
+                let assertion = if is_identity {
+                    if f.is_fallible {
+                         quote! {
+                            compile_error!(concat!("Field `", stringify!(#field_name), "` marked #[fallible] but native type matches storage type (infallible)."));
+                         }
+                    } else {
+                        quote! {}
+                    }
+                } else if f.is_fallible {
                     quote! {
                         const _: () = assert!(
                             <#native_elem as ZoruaNative<#storage_elem>>::IS_FALLIBLE,
@@ -881,7 +891,15 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                     }
                 };
 
-                let getter = if f.is_fallible {
+                // Array Getter
+                let getter = if is_identity {
+                     quote! {
+                        #field_vis fn #field_name(&self, index: usize) -> #native_elem {
+                            #assertion
+                            self.#field_raw_name[index]
+                        }
+                    }
+                } else if f.is_fallible {
                     quote! {
                         #field_vis fn #field_name(&self, index: usize) -> Result<#native_elem, #storage_elem> {
                             #assertion
@@ -899,15 +917,34 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                     }
                 };
 
-                let setter = quote! {
-                    #field_vis fn #field_setter(&mut self, index: usize, val: #native_elem) {
-                        let storage_val = <#native_elem as ZoruaNative<#storage_elem>>::to_storage(val);
-                        self.#field_raw_name[index] = storage_val;
+                // Array Setter
+                let setter = if is_identity {
+                     quote! {
+                        #field_vis fn #field_setter(&mut self, index: usize, val: #native_elem) {
+                            self.#field_raw_name[index] = val;
+                        }
+                    }
+                } else {
+                    quote! {
+                        #field_vis fn #field_setter(&mut self, index: usize, val: #native_elem) {
+                            let storage_val = <#native_elem as ZoruaNative<#storage_elem>>::to_storage(val);
+                            self.#field_raw_name[index] = storage_val;
+                        }
                     }
                 };
                 (getter, setter)
             } else {
-                let assertion = if f.is_fallible {
+                let is_identity = quote!(#field_native_type).to_string() == quote!(#field_storage_type).to_string();
+
+                let assertion = if is_identity {
+                     if f.is_fallible {
+                         quote! {
+                            compile_error!(concat!("Field `", stringify!(#field_name), "` marked #[fallible] but native type matches storage type (infallible)."));
+                         }
+                    } else {
+                        quote! {}
+                    }
+                } else if f.is_fallible {
                     quote! {
                         const _: () = assert!(
                             <#field_native_type as ZoruaNative<#field_storage_type>>::IS_FALLIBLE,
@@ -923,7 +960,15 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                     }
                 };
 
-                let getter = if f.is_fallible {
+                // Non-Array Getter
+                let getter = if is_identity {
+                     quote! {
+                        #field_vis fn #field_name(&self) -> #field_native_type {
+                            #assertion
+                            self.#field_raw_name()
+                        }
+                    }
+                } else if f.is_fallible {
                     quote! {
                         #field_vis fn #field_name(&self) -> Result<#field_native_type, #field_storage_type> {
                             #assertion
@@ -941,10 +986,19 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                     }
                 };
 
-                let setter = quote! {
-                    #field_vis fn #field_setter(&mut self, val: #field_native_type) {
-                        let storage_val = <#field_native_type as ZoruaNative<#field_storage_type>>::to_storage(val);
-                        self.#field_raw_setter(storage_val);
+                // Non-Array Setter
+                let setter = if is_identity {
+                    quote! {
+                        #field_vis fn #field_setter(&mut self, val: #field_native_type) {
+                            self.#field_raw_setter(val);
+                        }
+                    }
+                } else {
+                     quote! {
+                        #field_vis fn #field_setter(&mut self, val: #field_native_type) {
+                            let storage_val = <#field_native_type as ZoruaNative<#field_storage_type>>::to_storage(val);
+                            self.#field_raw_setter(storage_val);
+                        }
                     }
                 };
                 (getter, setter)
@@ -1016,7 +1070,17 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
 
                         if let (Some(native_elem), Some(storage_elem)) = (deconstruct_array(&sf_native_type), deconstruct_array(&sf_storage_type)) {
                             // Array-based bitfield subfield: generate indexed accessors
-                            let assertion = if sf.is_fallible {
+                            let is_identity = quote!(#native_elem).to_string() == quote!(#storage_elem).to_string();
+
+                            let assertion = if is_identity {
+                                if sf.is_fallible {
+                                     quote! {
+                                        compile_error!(concat!("Field `", stringify!(#sf_name), "` marked #[fallible] but native type matches storage type (infallible)."));
+                                     }
+                                } else {
+                                    quote! {}
+                                }
+                            } else if sf.is_fallible {
                                 quote! {
                                     const _: () = assert!(
                                         <#native_elem as ZoruaNative<#storage_elem>>::IS_FALLIBLE,
@@ -1032,7 +1096,15 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                                 }
                             };
 
-                            let getter = if sf.is_fallible {
+                            let getter = if is_identity {
+                                quote! {
+                                    #sf_vis fn #sf_name(&self, index: usize) -> #native_elem {
+                                        #assertion
+                                        let b_bits = <#native_elem as BackingStorage>::BITS;
+                                        self.#container_raw_name.get_bits_at::<#native_elem>(#sf_offset + index * b_bits)
+                                    }
+                                }
+                            } else if sf.is_fallible {
                                 quote! {
                                     #sf_vis fn #sf_name(&self, index: usize) -> Result<#native_elem, #storage_elem> {
                                         #assertion
@@ -1052,11 +1124,20 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                                 }
                             };
 
-                            let setter = quote! {
-                                #sf_vis fn #sf_setter(&mut self, index: usize, val: #native_elem) {
-                                    let b_bits = <#storage_elem as BackingStorage>::BITS;
-                                    let storage_val = <#native_elem as ZoruaNative<#storage_elem>>::to_storage(val);
-                                    self.#container_raw_name.set_bits_at::<#storage_elem>(storage_val, #sf_offset + index * b_bits);
+                            let setter = if is_identity {
+                                 quote! {
+                                    #sf_vis fn #sf_setter(&mut self, index: usize, val: #native_elem) {
+                                        let b_bits = <#native_elem as BackingStorage>::BITS;
+                                        self.#container_raw_name.set_bits_at::<#native_elem>(val, #sf_offset + index * b_bits);
+                                    }
+                                }
+                            } else {
+                                quote! {
+                                    #sf_vis fn #sf_setter(&mut self, index: usize, val: #native_elem) {
+                                        let b_bits = <#storage_elem as BackingStorage>::BITS;
+                                        let storage_val = <#native_elem as ZoruaNative<#storage_elem>>::to_storage(val);
+                                        self.#container_raw_name.set_bits_at::<#storage_elem>(storage_val, #sf_offset + index * b_bits);
+                                    }
                                 }
                             };
 
@@ -1078,40 +1159,81 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                             }
                         } else if sf.is_zeroedoption {
                             // Non-fallible zeroedoption accessor: returns Option<NativeType>
-                            quote! {
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_name(&self) -> Option<#sf_native_type> {
-                                    let storage_val = self.#sf_raw_name();
-                                    if storage_val == <#sf_storage_type as BackingStorage>::ZERO {
-                                        None
-                                    } else {
-                                        Some(<#sf_native_type as ZoruaNative<#sf_storage_type>>::from_storage(storage_val))
+                            let is_identity = quote!(#sf_native_type).to_string() == quote!(#sf_storage_type).to_string();
+                            
+                            if is_identity {
+                                quote! {
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_name(&self) -> Option<#sf_native_type> {
+                                        let storage_val = self.#sf_raw_name();
+                                        if storage_val == <#sf_storage_type as BackingStorage>::ZERO {
+                                            None
+                                        } else {
+                                            Some(storage_val)
+                                        }
+                                    }
+
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_setter(&mut self, val: Option<#sf_native_type>) {
+                                        let storage_val = match val {
+                                            None => <#sf_storage_type as BackingStorage>::ZERO,
+                                            Some(v) => v,
+                                        };
+                                        self.#sf_raw_setter(storage_val);
+                                    }
+                                    
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
+                                        self.#container_raw_name.get_bits_at::<#sf_storage_type>(#sf_offset)
+                                    }
+
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
+                                        self.#container_raw_name.set_bits_at::<#sf_storage_type>(val, #sf_offset);
                                     }
                                 }
+                            } else {
+                                quote! {
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_name(&self) -> Option<#sf_native_type> {
+                                        let storage_val = self.#sf_raw_name();
+                                        if storage_val == <#sf_storage_type as BackingStorage>::ZERO {
+                                            None
+                                        } else {
+                                            Some(<#sf_native_type as ZoruaNative<#sf_storage_type>>::from_storage(storage_val))
+                                        }
+                                    }
 
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_setter(&mut self, val: Option<#sf_native_type>) {
-                                    let storage_val = match val {
-                                        None => <#sf_storage_type as BackingStorage>::ZERO,
-                                        Some(v) => <#sf_native_type as ZoruaNative<#sf_storage_type>>::to_storage(v),
-                                    };
-                                    self.#sf_raw_setter(storage_val);
-                                }
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_setter(&mut self, val: Option<#sf_native_type>) {
+                                        let storage_val = match val {
+                                            None => <#sf_storage_type as BackingStorage>::ZERO,
+                                            Some(v) => <#sf_native_type as ZoruaNative<#sf_storage_type>>::to_storage(v),
+                                        };
+                                        self.#sf_raw_setter(storage_val);
+                                    }
 
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
-                                    self.#container_raw_name.get_bits_at::<#sf_storage_type>(#sf_offset)
-                                }
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
+                                        self.#container_raw_name.get_bits_at::<#sf_storage_type>(#sf_offset)
+                                    }
 
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
-                                    self.#container_raw_name.set_bits_at::<#sf_storage_type>(val, #sf_offset);
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
+                                        self.#container_raw_name.set_bits_at::<#sf_storage_type>(val, #sf_offset);
+                                    }
                                 }
                             }
                         } else if sf.is_fallible {
-                            quote! {
-                                // Fallible aliased getter - returns Result<NativeType, StorageType>
-                                #(#sf_attrs)*
+                            let is_identity = quote!(#sf_native_type).to_string() == quote!(#sf_storage_type).to_string();
+                            if is_identity {
+                                 quote! {
+                                    compile_error!(concat!("Field `", stringify!(#sf_name), "` marked #[fallible] but native type matches storage type (infallible)."));
+                                 }
+                            } else {
+                                quote! {
+                                    // Fallible aliased getter - returns Result<NativeType, StorageType>
+                                    #(#sf_attrs)*
                                     #sf_vis fn #sf_name(&self) -> Result<#sf_native_type, #sf_storage_type> {
                                         const _: () = assert!(
                                             <#sf_native_type as ZoruaNative<#sf_storage_type>>::IS_FALLIBLE,
@@ -1121,55 +1243,88 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                                         <#sf_native_type as ZoruaNative<#sf_storage_type>>::try_from_storage(storage_val)
                                     }
 
-                                // Aliased setter
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_setter(&mut self, val: #sf_native_type) {
-                                    let storage_val = <#sf_native_type as ZoruaNative<#sf_storage_type>>::to_storage(val);
-                                    self.#sf_raw_setter(storage_val);
-                                }
+                                    // Aliased setter
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_setter(&mut self, val: #sf_native_type) {
+                                        let storage_val = <#sf_native_type as ZoruaNative<#sf_storage_type>>::to_storage(val);
+                                        self.#sf_raw_setter(storage_val);
+                                    }
+                                    
+                                    // Raw getter - returns StorageType directly
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
+                                        self.#container_raw_name.get_bits_at::<#sf_storage_type>(#sf_offset)
+                                    }
 
-                                // Raw getter - returns StorageType directly
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
-                                    self.#container_raw_name.get_bits_at::<#sf_storage_type>(#sf_offset)
-                                }
-
-                                // Raw setter
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
-                                    self.#container_raw_name.set_bits_at::<#sf_storage_type>(val, #sf_offset);
+                                    // Raw setter
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
+                                        self.#container_raw_name.set_bits_at::<#sf_storage_type>(val, #sf_offset);
+                                    }
                                 }
                             }
                         } else {
-                            quote! {
-                                // Aliased getter - returns NativeType via ZoruaNative<StorageType>
-                                #(#sf_attrs)*
+                            let is_identity = quote!(#sf_native_type).to_string() == quote!(#sf_storage_type).to_string();
+                            if is_identity {
+                                quote! {
+                                    // Identity accessors
+                                    #(#sf_attrs)*
                                     #sf_vis fn #sf_name(&self) -> #sf_native_type {
                                         const _: () = assert!(
                                             !<#sf_native_type as ZoruaNative<#sf_storage_type>>::IS_FALLIBLE,
                                             concat!("Field `", stringify!(#sf_name), "` missing #[fallible] but conversion is fallible.")
                                         );
-                                        let storage_val = self.#sf_raw_name();
-                                        <#sf_native_type as ZoruaNative<#sf_storage_type>>::from_storage(storage_val)
+                                        self.#sf_raw_name()
                                     }
-
-                                // Aliased setter
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_setter(&mut self, val: #sf_native_type) {
-                                    let storage_val = <#sf_native_type as ZoruaNative<#sf_storage_type>>::to_storage(val);
-                                    self.#sf_raw_setter(storage_val);
+    
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_setter(&mut self, val: #sf_native_type) {
+                                        self.#sf_raw_setter(val);
+                                    }
+                                    
+                                    // Raw getter - returns StorageType directly
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
+                                        self.#container_raw_name.get_bits_at::<#sf_storage_type>(#sf_offset)
+                                    }
+    
+                                    // Raw setter
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
+                                        self.#container_raw_name.set_bits_at::<#sf_storage_type>(val, #sf_offset);
+                                    }
                                 }
-
-                                // Raw getter - returns StorageType directly
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
-                                    self.#container_raw_name.get_bits_at::<#sf_storage_type>(#sf_offset)
-                                }
-
-                                // Raw setter
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
-                                    self.#container_raw_name.set_bits_at::<#sf_storage_type>(val, #sf_offset);
+                            } else {
+                                quote! {
+                                    // Aliased getter - returns NativeType via ZoruaNative<StorageType>
+                                    #(#sf_attrs)*
+                                        #sf_vis fn #sf_name(&self) -> #sf_native_type {
+                                            const _: () = assert!(
+                                                !<#sf_native_type as ZoruaNative<#sf_storage_type>>::IS_FALLIBLE,
+                                                concat!("Field `", stringify!(#sf_name), "` missing #[fallible] but conversion is fallible.")
+                                            );
+                                            let storage_val = self.#sf_raw_name();
+                                            <#sf_native_type as ZoruaNative<#sf_storage_type>>::from_storage(storage_val)
+                                        }
+    
+                                    // Aliased setter
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_setter(&mut self, val: #sf_native_type) {
+                                        let storage_val = <#sf_native_type as ZoruaNative<#sf_storage_type>>::to_storage(val);
+                                        self.#sf_raw_setter(storage_val);
+                                    }
+                                    
+                                    // Raw getter - returns StorageType directly
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
+                                        self.#container_raw_name.get_bits_at::<#sf_storage_type>(#sf_offset)
+                                    }
+    
+                                    // Raw setter
+                                    #(#sf_attrs)*
+                                    #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
+                                        self.#container_raw_name.set_bits_at::<#sf_storage_type>(val, #sf_offset);
+                                    }
                                 }
                             }
                         }
