@@ -58,10 +58,7 @@ pub unsafe trait ZoruaField: Sized {
     #[cfg(feature = "std")]
     fn box_transmute<T: ZoruaField>(self: Box<Self>) -> Box<T> {
         const { assert_transmute_compatible::<Self, T>() };
-        unsafe {
-            let raw_ptr: *mut Self = Box::into_raw(self);
-            Box::from_raw(raw_ptr as *mut T)
-        }
+        unsafe { mem::transmute(self) }
     }
 
     fn transmute_ref<T: ZoruaField>(&self) -> &T {
