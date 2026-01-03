@@ -151,6 +151,10 @@ impl_zorua_native_for_primitives!(u16, U16);
 impl_zorua_native_for_primitives!(u32, U32);
 impl_zorua_native_for_primitives!(u64, U64);
 
+impl_zorua_native_for_primitives!(i16, I16);
+impl_zorua_native_for_primitives!(i32, I32);
+impl_zorua_native_for_primitives!(i64, I64);
+
 macro_rules! impl_zorua_native_for_ux2 {
     ($($ty:ident),* ; $backing:ty) => {
         $(
@@ -224,7 +228,7 @@ macro_rules! impl_zorua_native_identity_primitive {
 
 // u16, u32, u64 do not implement ZoruaField, so they need explicit identity impls to be used in bitfields.
 // Added u8 here as well after removing the blanket implementation.
-impl_zorua_native_identity_primitive!(u8, u16, u32, u64);
+impl_zorua_native_identity_primitive!(u8, u16, u32, u64, i16, i32, i64);
 
 // (Blanket implementation removed due to conflicts with explicit identity impls)
 
