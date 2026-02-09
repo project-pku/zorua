@@ -4,6 +4,18 @@ use syn::{
     Attribute, Data, DataEnum, DataStruct, DeriveInput, LitInt, Type, token,
 };
 
+/// Formats a prefixed/suffixed identifier, moving leading underscores before the prefix.
+/// e.g. `prefixed_name("set_", "_unused", "")` → `"_set_unused"`.
+fn prefixed_name(prefix: &str, name: &syn::Ident, suffix: &str) -> syn::Ident {
+    let name_str = name.to_string();
+    let trimmed = name_str.trim_start_matches('_');
+    let underscores = &name_str[..name_str.len() - trimmed.len()];
+    syn::Ident::new(
+        &format!("{underscores}{prefix}{trimmed}{suffix}"),
+        name.span(),
+    )
+}
+
 /// This derive macro works on structs and c-like enums.
 ///
 /// Composite structs must additionally have the
@@ -764,8 +776,8 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
             let field_vis = &f.vis;
             let field_name = &f.name;
             let field_raw_name = syn::Ident::new(&format!("{}_raw", f.name), f.name.span());
-            let field_setter = syn::Ident::new(&format!("set_{}", f.name), f.name.span());
-            let field_raw_setter = syn::Ident::new(&format!("set_{}_raw", f.name), f.name.span());
+            let field_setter = prefixed_name("set_", &f.name, "");
+            let field_raw_setter = prefixed_name("set_", &f.name, "_raw");
             let field_native_type = &f.native_type;
             let field_storage_type = &f.storage_type;
 
@@ -927,7 +939,7 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
             let field_attrs = &f.attrs;
             let field_vis = &f.vis;
             let field_raw_name = syn::Ident::new(&format!("{}_raw", f.name), f.name.span());
-            let field_raw_setter = syn::Ident::new(&format!("set_{}_raw", f.name), f.name.span());
+            let field_raw_setter = prefixed_name("set_", &f.name, "_raw");
             let field_storage_type = &f.storage_type;
 
             quote! {
@@ -959,7 +971,7 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                     let sf_attrs = &sf.attrs;
                     let sf_vis = &sf.vis;
                     let sf_name = &sf.name;
-                    let sf_setter = syn::Ident::new(&format!("set_{}", sf.name), sf.name.span());
+                    let sf_setter = prefixed_name("set_", &sf.name, "");
                     let sf_native_type_ts = &sf.native_type;
                     let sf_storage_type_ts = &sf.storage_type;
                     let sf_offset = &sf.bit_offset;
@@ -971,7 +983,7 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                     if sf.has_backing_type {
                         // Aliased bitfield subfield: generate both aliased and _raw accessors
                         let sf_raw_name = syn::Ident::new(&format!("{}_raw", sf.name), sf.name.span());
-                        let sf_raw_setter = syn::Ident::new(&format!("set_{}_raw", sf.name), sf.name.span());
+                        let sf_raw_setter = prefixed_name("set_", &sf.name, "_raw");
 
                         if let (Some(native_elem), Some(storage_elem)) = (deconstruct_array(&sf_native_type), deconstruct_array(&sf_storage_type)) {
                             // Array-based bitfield subfield: generate indexed accessors
@@ -1237,7 +1249,7 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                         // Direct bitfield subfield (no `as`): generate direct accessors
                         if let (Some(native_elem), Some(_)) = (deconstruct_array(&sf_native_type), deconstruct_array(&sf_storage_type)) {
                             let sf_raw_name = syn::Ident::new(&format!("{}_raw", sf.name), sf.name.span());
-                            let sf_raw_setter = syn::Ident::new(&format!("set_{}_raw", sf.name), sf.name.span());
+                            let sf_raw_setter = prefixed_name("set_", &sf.name, "_raw");
                             
                             quote! {
                                 #(#sf_attrs)*
