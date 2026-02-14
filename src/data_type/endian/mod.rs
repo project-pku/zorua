@@ -60,7 +60,7 @@ macro_rules! define_endian_int {
             _endian: PhantomData<E>,
         }
 
-        unsafe impl<E: Endian> $crate::traits::ZoruaField for $name<E> {}
+        unsafe impl<E: Endian> $crate::traits::ZoruaStruct for $name<E> {}
 
         impl<E: Endian> $name<E> {
             pub const fn new(value: $primitive) -> Self {

@@ -1,5 +1,6 @@
 use core::mem;
 
+use crate::bits;
 use crate::data_type::*;
 
 pub use zorua_macro::*;
@@ -7,7 +8,7 @@ pub use zorua_macro::*;
 //------------- Field trait + impls -------------
 
 /// const assertion that ensures that target has a known
-/// endianness, so that the [ZoruaField] trait is well-formed.
+/// endianness, so that the [ZoruaStruct] trait is well-formed.
 const _: () = assert!(
     cfg!(target_endian = "big") || cfg!(target_endian = "little"),
     "This crate can only be compiled on little or big endian systems"
@@ -33,7 +34,7 @@ const fn assert_transmute_compatible<A, B>() {
 /// This trait is safe to implement *iff*:
 /// - `Self` a *POD*, which is to say any possible bit pattern produces a valid instance of it.
 /// - The representation of `Self` is independent of the endianness of the system.
-pub unsafe trait ZoruaField: Sized {
+pub unsafe trait ZoruaStruct: Sized {
     fn as_bytes(&self) -> &[u8] {
         let slf: *const Self = self;
         unsafe { core::slice::from_raw_parts(slf.cast::<u8>(), mem::size_of::<Self>()) }
@@ -44,8 +45,8 @@ pub unsafe trait ZoruaField: Sized {
         unsafe { core::slice::from_raw_parts_mut(slf.cast::<u8>(), mem::size_of::<Self>()) }
     }
 
-    /// Transmutes a [`ZoruaField`] into another with a compatible layout.
-    fn transmute<T: ZoruaField>(self) -> T {
+    /// Transmutes a [`ZoruaStruct`] into another with a compatible layout.
+    fn transmute<T: ZoruaStruct>(self) -> T {
         const { assert_transmute_compatible::<Self, T>() };
         // SAFETY: Layout compatibility verified by const assertion above
         unsafe {
@@ -56,22 +57,22 @@ pub unsafe trait ZoruaField: Sized {
     }
 
     #[cfg(feature = "std")]
-    fn box_transmute<T: ZoruaField>(self: Box<Self>) -> Box<T> {
+    fn box_transmute<T: ZoruaStruct>(self: Box<Self>) -> Box<T> {
         const { assert_transmute_compatible::<Self, T>() };
         unsafe { mem::transmute(self) }
     }
 
-    fn transmute_ref<T: ZoruaField>(&self) -> &T {
+    fn transmute_ref<T: ZoruaStruct>(&self) -> &T {
         const { assert_transmute_compatible::<Self, T>() };
         unsafe { mem::transmute(self) }
     }
 
-    fn transmute_mut<T: ZoruaField>(&mut self) -> &mut T {
+    fn transmute_mut<T: ZoruaStruct>(&mut self) -> &mut T {
         const { assert_transmute_compatible::<Self, T>() };
         unsafe { mem::transmute(self) }
     }
 
-    fn transmute_split_ref<A: ZoruaField, B: ZoruaField>(&self) -> (&A, &B) {
+    fn transmute_split_ref<A: ZoruaStruct, B: ZoruaStruct>(&self) -> (&A, &B) {
         const { assert_transmute_compatible::<Self, (A, B)>() };
         unsafe {
             let base = self as *const Self as *const u8;
@@ -81,7 +82,7 @@ pub unsafe trait ZoruaField: Sized {
         }
     }
 
-    fn transmute_split_mut<A: ZoruaField, B: ZoruaField>(&mut self) -> (&mut A, &mut B) {
+    fn transmute_split_mut<A: ZoruaStruct, B: ZoruaStruct>(&mut self) -> (&mut A, &mut B) {
         const { assert_transmute_compatible::<Self, (A, B)>() };
         unsafe {
             let base = self as *mut Self as *mut u8;
@@ -92,180 +93,207 @@ pub unsafe trait ZoruaField: Sized {
     }
 }
 
-/// A special kind of [ZoruaField] that can be used as a backing storage for bitfields.
-///
-/// (Practically speaking, just the built-in uints like u8, u16, u32, u64.)
-pub trait BackingField: ZoruaField + Copy + core::fmt::Debug + PartialEq {
-    /// Get the bits at `index` as type `T`.
-    ///
-    /// This represents a bitfield access: `T` is the storage type of the subfield.
-    fn get_bits_at<T: BackingStorage>(self, index: usize) -> T;
+unsafe impl ZoruaStruct for u8 {}
+unsafe impl ZoruaStruct for u16 {}
+unsafe impl ZoruaStruct for u32 {}
+unsafe impl ZoruaStruct for u64 {}
 
-    /// Set the bits at `index` to the value of type `T`.
-    ///
-    /// This represents a bitfield modification.
-    fn set_bits_at<T: BackingStorage>(&mut self, value: T, index: usize);
+unsafe impl ZoruaStruct for () {}
+
+unsafe impl<const N: usize, T: ZoruaStruct> ZoruaStruct for [T; N] {}
+
+macro_rules! impl_zorua_struct_for_tuple {
+    ($($T:ident),*) => {
+        unsafe impl<$($T: ZoruaStruct),*> ZoruaStruct for ($($T,)*) {}
+    };
 }
 
-/// A marker trait for types that can represent a bitfield's value in storage.
-///
-/// This is implemented for the built-in uints and the [`u1`]...[`u15`] types.
-pub trait BackingStorage: Copy {
-    /// The bit mask for this type (as u64).
-    const MASK: u64;
+impl_zorua_struct_for_tuple!(T, U);
+impl_zorua_struct_for_tuple!(T, U, V);
+impl_zorua_struct_for_tuple!(T, U, V, W);
+impl_zorua_struct_for_tuple!(T, U, V, W, X);
+impl_zorua_struct_for_tuple!(T, U, V, W, X, Y);
+impl_zorua_struct_for_tuple!(T, U, V, W, X, Y, Z);
 
-    /// The number of bits in this type.
+// =====================================================================
+// Zorua<S> — unified bit read/write trait
+// =====================================================================
+
+/// A type that can be read/written as `S`-representation bits.
+///
+/// `S` selects the storage format (width + endianness).
+/// The identity impl `Zorua<Self>` is always the default.
+pub trait Zorua<S>: Sized + Clone {
+    /// Number of bits in this storage representation.
     const BITS: usize;
 
-    /// Convert to u64 representation.
-    fn to_u64(self) -> u64;
+    /// Whether reading can fail (e.g., enum with fewer variants than bit patterns).
+    const IS_FALLIBLE: bool;
 
-    /// Convert from u64 representation.
-    fn from_u64(value: u64) -> Self;
+    /// Read from bit-packed bytes at an arbitrary bit offset.
+    fn read_bits(src: &[u8], bit_offset: usize) -> Self;
 
-    /// The zero value for this type.
-    const ZERO: Self;
-}
-
-impl BackingField for u8 {
-    #[inline]
-    fn get_bits_at<T: BackingStorage>(self, index: usize) -> T {
-        T::from_u64((u64::from(self) & (T::MASK << index)) >> index)
+    /// Try to read from bit-packed bytes. Returns Err(()) on invalid data.
+    fn try_read_bits(src: &[u8], bit_offset: usize) -> Result<Self, ()> {
+        Ok(Self::read_bits(src, bit_offset))
     }
 
-    #[inline]
-    fn set_bits_at<T: BackingStorage>(&mut self, value: T, index: usize) {
-        let val_native = value.to_u64();
-        *self &= !((T::MASK as u8) << index);
-        *self |= (val_native as u8) << index;
-    }
+    /// Write to bit-packed bytes at an arbitrary bit offset.
+    fn write_bits(&self, dst: &mut [u8], bit_offset: usize);
 }
 
-// Implement BackingField for endian-aware types by delegating to their inner value
-macro_rules! impl_backing_field_for_endian {
-    ($($ty:ident),*) => {
-        $(
-            impl<E: Endian> BackingField for $ty<E> {
-                #[inline]
-                fn get_bits_at<T: BackingStorage>(self, index: usize) -> T {
-                    let val = self.value() as u64;
-                    T::from_u64((val & (T::MASK << index)) >> index)
-                }
+// =====================================================================
+// Zorua identity impls for bool
+// =====================================================================
 
-                #[inline]
-                fn set_bits_at<T: BackingStorage>(&mut self, value: T, index: usize) {
-                    let mut val = self.value() as u64;
-                    val &= !(T::MASK << index);
-                    val |= value.to_u64() << index;
-                    *self = Self::new(val as _);
-                }
-            }
-        )*
-    };
-}
-
-impl_backing_field_for_endian!(U16, U32, U64);
-
-// Implement BackingStorage for primitives and ux2 types
-impl BackingStorage for bool {
-    const MASK: u64 = 1;
+impl Zorua<bool> for bool {
     const BITS: usize = 1;
+    const IS_FALLIBLE: bool = false;
+
     #[inline]
-    fn to_u64(self) -> u64 {
-        self as u64
+    fn read_bits(src: &[u8], bit_offset: usize) -> Self {
+        bits::read_u64(src, bit_offset, 1) != 0
     }
+
     #[inline]
-    fn from_u64(value: u64) -> Self {
-        value != 0
+    fn write_bits(&self, dst: &mut [u8], bit_offset: usize) {
+        bits::write_u64(dst, bit_offset, 1, *self as u64);
     }
-    const ZERO: Self = false;
 }
 
-macro_rules! impl_backing_storage_for_ux2 {
+// =====================================================================
+// Zorua identity impls for u8, u16, u32, u64
+// =====================================================================
+
+macro_rules! impl_zorua_identity_for_primitives {
     ($($ty:ident),*) => {
         $(
-            impl BackingStorage for $ty {
-                const MASK: u64 = (1 << Self::BITS) - 1;
-                const BITS: usize = Self::BITS as usize;
+            impl Zorua<$ty> for $ty {
+                const BITS: usize = <$ty>::BITS as usize;
+                const IS_FALLIBLE: bool = false;
+
                 #[inline]
-                fn to_u64(self) -> u64 { self.into() }
+                fn read_bits(src: &[u8], bit_offset: usize) -> Self {
+                    bits::read_u64(src, bit_offset, <$ty>::BITS as usize) as $ty
+                }
+
                 #[inline]
-                fn from_u64(value: u64) -> Self { Self::new(value as _) }
-                const ZERO: Self = Self::new(0);
+                fn write_bits(&self, dst: &mut [u8], bit_offset: usize) {
+                    bits::write_u64(dst, bit_offset, <$ty>::BITS as usize, *self as u64);
+                }
             }
         )*
     };
 }
 
-impl_backing_storage_for_ux2!(u1, u2, u3, u4, u5, u6, u7, u9, u10, u11, u12, u13, u14, u15);
+impl_zorua_identity_for_primitives!(u8, u16, u32, u64);
 
-macro_rules! impl_backing_storage_for_primitives {
+// =====================================================================
+// Zorua identity impls for ux2 types (u1-u7, u9-u15, u17-u31)
+// =====================================================================
+
+macro_rules! impl_zorua_identity_for_ux2 {
     ($($ty:ident),*) => {
         $(
-            impl BackingStorage for $ty {
-                const MASK: u64 = if $ty::BITS < 64 { (1 << $ty::BITS) - 1 } else { !0 };
-                const BITS: usize = $ty::BITS as usize;
+            impl Zorua<$ty> for $ty {
+                const BITS: usize = <$ty>::BITS as usize;
+                const IS_FALLIBLE: bool = false;
+
                 #[inline]
-                fn to_u64(self) -> u64 { self as u64 }
+                fn read_bits(src: &[u8], bit_offset: usize) -> Self {
+                    $ty::new(bits::read_u64(src, bit_offset, <$ty>::BITS as usize) as _)
+                }
+
                 #[inline]
-                fn from_u64(value: u64) -> Self { value as _ }
-                const ZERO: Self = 0;
+                fn write_bits(&self, dst: &mut [u8], bit_offset: usize) {
+                    let val: u64 = (*self).into();
+                    bits::write_u64(dst, bit_offset, <$ty>::BITS as usize, val);
+                }
             }
         )*
     };
 }
 
-impl_backing_storage_for_primitives!(u8, u16, u32, u64);
+impl_zorua_identity_for_ux2!(u1, u2, u3, u4, u5, u6, u7, u9, u10, u11, u12, u13, u14, u15);
+impl_zorua_identity_for_ux2!(u17, u18, u19, u20, u21, u22, u23, u24, u25, u26, u27, u28, u29, u30, u31);
 
-impl<T: BackingStorage, const N: usize> BackingStorage for [T; N] {
-    const BITS: usize = T::BITS * N;
-    const MASK: u64 = {
-        let mut mask = 0;
-        let mut i = 0;
-        while i < N {
-            mask |= T::MASK << (i * T::BITS);
-            i += 1;
+// =====================================================================
+// Zorua identity impls for endian types (u16_le, u32_le, etc.)
+// =====================================================================
+
+macro_rules! impl_zorua_identity_for_endian {
+    ($wrapper:ident, $bits:expr) => {
+        impl<E: Endian> Zorua<$wrapper<E>> for $wrapper<E> {
+            const BITS: usize = $bits;
+            const IS_FALLIBLE: bool = false;
+
+            #[inline]
+            fn read_bits(src: &[u8], bit_offset: usize) -> Self {
+                // Read raw bits and construct via new() — the bytes are already in the
+                // correct endian order because read_u64 reads LE and we construct from
+                // the native value.
+                $wrapper::new(bits::read_u64(src, bit_offset, $bits) as _)
+            }
+
+            #[inline]
+            fn write_bits(&self, dst: &mut [u8], bit_offset: usize) {
+                bits::write_u64(dst, bit_offset, $bits, self.value() as u64);
+            }
         }
-        mask
-    };
-
-    #[inline]
-    fn to_u64(self) -> u64 {
-        let mut out = 0;
-        for (i, x) in self.iter().enumerate() {
-            out |= x.to_u64() << (i * T::BITS);
-        }
-        out
-    }
-
-    #[inline]
-    fn from_u64(mut value: u64) -> Self {
-        let mut out = [T::ZERO; N];
-        for i in 0..N {
-            out[i] = T::from_u64(value & T::MASK);
-            value >>= T::BITS;
-        }
-        out
-    }
-
-    const ZERO: Self = [T::ZERO; N];
-}
-
-unsafe impl ZoruaField for u8 {}
-
-unsafe impl ZoruaField for () {}
-
-unsafe impl<const N: usize, T: ZoruaField> ZoruaField for [T; N] {}
-
-macro_rules! impl_zorua_field_for_tuple {
-    ($($T:ident),*) => {
-        unsafe impl<$($T: ZoruaField),*> ZoruaField for ($($T,)*) {}
     };
 }
 
-impl_zorua_field_for_tuple!(T, U);
-impl_zorua_field_for_tuple!(T, U, V);
-impl_zorua_field_for_tuple!(T, U, V, W);
-impl_zorua_field_for_tuple!(T, U, V, W, X);
-impl_zorua_field_for_tuple!(T, U, V, W, X, Y);
-impl_zorua_field_for_tuple!(T, U, V, W, X, Y, Z);
+impl_zorua_identity_for_endian!(U16, 16);
+impl_zorua_identity_for_endian!(U32, 32);
+impl_zorua_identity_for_endian!(U64, 64);
+
+// =====================================================================
+// Zorua cross impls: primitives → endian types
+// (e.g., u16: Zorua<u16_le> for flat `as u16_le` fields)
+// =====================================================================
+
+macro_rules! impl_zorua_cross_for_endian {
+    ($native:ty, $wrapper:ident, $bits:expr) => {
+        impl<E: Endian> Zorua<$wrapper<E>> for $native {
+            const BITS: usize = $bits;
+            const IS_FALLIBLE: bool = false;
+
+            #[inline]
+            fn read_bits(src: &[u8], bit_offset: usize) -> Self {
+                bits::read_u64(src, bit_offset, $bits) as $native
+            }
+
+            #[inline]
+            fn write_bits(&self, dst: &mut [u8], bit_offset: usize) {
+                bits::write_u64(dst, bit_offset, $bits, *self as u64);
+            }
+        }
+    };
+}
+
+impl_zorua_cross_for_endian!(u16, U16, 16);
+impl_zorua_cross_for_endian!(u32, U32, 32);
+impl_zorua_cross_for_endian!(u64, U64, 64);
+
+// =====================================================================
+// Zorua identity impl for arrays: [T; N] where T: Zorua<T>
+// =====================================================================
+
+impl<T: Zorua<T>, const N: usize> Zorua<[T; N]> for [T; N] {
+    const BITS: usize = <T as Zorua<T>>::BITS * N;
+    const IS_FALLIBLE: bool = false;
+
+    #[inline]
+    fn read_bits(src: &[u8], bit_offset: usize) -> Self {
+        let stride = <T as Zorua<T>>::BITS;
+        core::array::from_fn(|i| T::read_bits(src, bit_offset + i * stride))
+    }
+
+    #[inline]
+    fn write_bits(&self, dst: &mut [u8], bit_offset: usize) {
+        let stride = <T as Zorua<T>>::BITS;
+        for (i, elem) in self.iter().enumerate() {
+            elem.write_bits(dst, bit_offset + i * stride);
+        }
+    }
+}

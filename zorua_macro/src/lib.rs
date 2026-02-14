@@ -1,7 +1,10 @@
-﻿use proc_macro::TokenStream;
+use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    Attribute, Data, DataEnum, DataStruct, DeriveInput, LitInt, Type, token,
+    Attribute, Data, DataEnum, DataStruct, DeriveInput, Expr, Ident, LitInt, Token, Type,
+    Visibility, braced, token,
+    parse::{Parse, ParseStream},
+    punctuated::Punctuated,
 };
 
 /// Formats a prefixed/suffixed identifier, moving leading underscores before the prefix.
@@ -16,58 +19,44 @@ fn prefixed_name(prefix: &str, name: &syn::Ident, suffix: &str) -> syn::Ident {
     )
 }
 
-/// This derive macro works on structs and c-like enums.
+// =====================================================================
+// derive(ZoruaStruct) — renamed from derive(ZoruaField)
+// =====================================================================
+
+/// Derive macro for `ZoruaStruct` (POD types safe to transmute).
 ///
-/// Composite structs must additionally have the
-/// [C repr](https://doc.rust-lang.org/nomicon/other-reprs.html#reprc),
-/// in order to ensure their layout.
-/// ```ignore
-/// #[derive(ZoruaField)]
-/// #[repr(C)] //mandatory for composite structs
-/// struct MyStruct {
-///     fieldA: u16,
-///     fieldB: OtherZoruaField,
-/// }
-/// ```
-#[proc_macro_derive(ZoruaField)]
-pub fn zoruafield_derive_macro(item: TokenStream) -> TokenStream {
-    let ast: DeriveInput = syn::parse(item).unwrap(); //parse
+/// Composite structs must have `#[repr(C)]`.
+/// Enums must have `#[repr(u8)]` and exactly 256 variants.
+#[proc_macro_derive(ZoruaStruct)]
+pub fn zorua_struct_derive_macro(item: TokenStream) -> TokenStream {
+    let ast: DeriveInput = syn::parse(item).unwrap();
     let result = match &ast.data {
-        Data::Struct(data) => impl_zoruafield_struct(&ast, data),
-        Data::Enum(data) => impl_zoruafield_enum(&ast, data),
+        Data::Struct(data) => impl_zoruastruct_struct(&ast, data),
+        Data::Enum(data) => impl_zoruastruct_enum(&ast, data),
         _ => Err(syn::Error::new_spanned(
             &ast,
-            "ZoruaField can only be derived for structs and enums",
+            "ZoruaStruct can only be derived for structs and enums",
         )),
     };
     result.unwrap_or_else(|e| e.into_compile_error().into())
 }
 
-fn impl_zoruafield_struct(ast: &DeriveInput, data: &DataStruct) -> Result<TokenStream, syn::Error> {
-    //Ensure composite structs are repr C (otherwise size, alignment, and order are undefined)
+fn impl_zoruastruct_struct(ast: &DeriveInput, data: &DataStruct) -> Result<TokenStream, syn::Error> {
     if (data.fields.len() > 1) && !get_repr_state(&ast.attrs)?.repr_c {
         return Err(syn::Error::new_spanned(
             &ast.ident,
-            "Composite structs must have the C repr to derive ZoruaField. \
+            "Composite structs must have the C repr to derive ZoruaStruct. \
             Try adding `#[repr(C)]` to the struct.",
         ));
     }
-
-    Ok(generate_impl(
-        "ZoruaField",
-        true,
-        ast,
-        None,
-        None,
-    ))
+    Ok(generate_impl("ZoruaStruct", true, ast, None, None))
 }
 
-fn impl_zoruafield_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, syn::Error> {
-    //These two conditions ensure enum is a POD
+fn impl_zoruastruct_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, syn::Error> {
     if !get_repr_state(&ast.attrs)?.repr_u8 {
         return Err(syn::Error::new_spanned(
             &ast.ident,
-            "Enums must have the u8 repr to derive ZoruaField. \
+            "Enums must have the u8 repr to derive ZoruaStruct. \
             Try adding `#[repr(u8)]` to the enum.",
         ));
     }
@@ -75,60 +64,39 @@ fn impl_zoruafield_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStrea
         return Err(syn::Error::new_spanned(
             &ast.ident,
             format!(
-                "Enums must have exactly 256 variants to derive ZoruaField (found {}).",
+                "Enums must have exactly 256 variants to derive ZoruaStruct (found {}).",
                 data.variants.len()
             ),
         ));
     }
-
-    Ok(generate_impl("ZoruaField", true, ast, None, None))
+    Ok(generate_impl("ZoruaStruct", true, ast, None, None))
 }
 
-/// Derive macro that implements `ZoruaNative` trait for enums and newtype structs.
+// =====================================================================
+// derive(Zorua) — bit read/write trait for enums and newtypes
+// =====================================================================
+
+/// Derive macro that implements `Zorua<S>` trait for enums and newtype structs.
 ///
-/// For enums with `#[repr(u8)]` or `#[repr(u16)]`, implements `ZoruaNative<ReprType>`
-/// where the conversion validates the discriminant value.
-///
-/// For newtype structs with a single field, delegates to the inner type's `ZoruaNative` implementation.
-///
-/// # Requirements for enums
-/// - Must have `#[repr(u8)]` or `#[repr(u16)]`
-/// - All variants must have explicit discriminant values
-///
-/// # Requirements for newtype structs  
-/// - Must be a tuple struct with exactly one field
-/// - Must have `#[repr(transparent)]`
-///
-/// # Example
-/// ```ignore
-/// #[derive(ZoruaNative)]
-/// #[repr(u8)]
-/// pub enum Language {
-///     Japanese = 1,
-///     English = 2,
-///     French = 3,
-/// }
-///
-/// // Now Language implements ZoruaNative<u8>
-/// ```
-#[proc_macro_derive(ZoruaNative)]
-pub fn zoruanative_derive_macro(item: TokenStream) -> TokenStream {
+/// For enums: generates identity impl + wider storage impls.
+/// For newtypes: generates identity impl + delegation impls per known storage type.
+#[proc_macro_derive(Zorua)]
+pub fn zorua_derive_macro(item: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(item).unwrap();
     let result = match &ast.data {
-        Data::Enum(data) => impl_zoruanative_enum(&ast, data),
-        Data::Struct(data) => impl_zoruanative_struct(&ast, data),
+        Data::Enum(data) => impl_zorua_enum(&ast, data),
+        Data::Struct(data) => impl_zorua_struct(&ast, data),
         _ => Err(syn::Error::new_spanned(
             &ast,
-            "ZoruaNative can only be derived for enums and structs",
+            "Zorua can only be derived for enums and structs",
         )),
     };
     result.unwrap_or_else(|e| e.into_compile_error().into())
 }
 
-fn impl_zoruanative_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, syn::Error> {
+fn impl_zorua_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, syn::Error> {
     let repr_state = get_repr_state(&ast.attrs)?;
 
-    // Determine cast repr type and max bits (used for self as Repr)
     let (cast_repr, max_bits): (Type, usize) = if repr_state.repr_u8 {
         (syn::parse_str("u8").unwrap(), 8)
     } else if repr_state.repr_u16 {
@@ -136,7 +104,7 @@ fn impl_zoruanative_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStre
     } else {
         return Err(syn::Error::new_spanned(
             &ast.ident,
-            "ZoruaNative requires #[repr(u8)] or #[repr(u16)] for enums",
+            "Zorua requires #[repr(u8)] or #[repr(u16)] for enums",
         ));
     };
 
@@ -145,26 +113,29 @@ fn impl_zoruanative_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStre
 
     // Validate variants and build match arms
     let mut match_arms = quote! {};
+    let mut try_match_arms = quote! {};
     for variant in &data.variants {
         if !variant.fields.is_empty() {
             return Err(syn::Error::new_spanned(
                 variant,
-                "ZoruaNative only supports c-like enums (variants cannot have fields)",
+                "Zorua only supports c-like enums (variants cannot have fields)",
             ));
         }
         if variant.discriminant.is_none() {
             return Err(syn::Error::new_spanned(
                 variant,
-                "ZoruaNative requires explicit discriminant values for all variants",
+                "Zorua requires explicit discriminant values for all variants",
             ));
         }
         let variant_ident = &variant.ident;
         match_arms.extend(quote! {
+            x if x == #ident::#variant_ident as #cast_repr => #ident::#variant_ident,
+        });
+        try_match_arms.extend(quote! {
             x if x == #ident::#variant_ident as #cast_repr => Ok(#ident::#variant_ident),
         });
     }
 
-    // Compute minimum bits required: ceil(log2(n)) for n variants
     let variant_count = data.variants.len();
     let min_bits = if variant_count <= 1 {
         1
@@ -172,12 +143,10 @@ fn impl_zoruanative_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStre
         (usize::BITS - (variant_count - 1).leading_zeros()) as usize
     };
 
-    // Build list of all storage types to implement for:
-    // - All uX types from min_bits to max_bits (matching repr)
-    // - For u16+, also add _le and _be endian variants
+    // Build list of all storage types to implement for
     let mut all_types: Vec<(Type, bool, usize)> = Vec::new(); // (type, is_endian, bits)
 
-    // Add ux2 types for bits < 8 (u1-u7)
+    // ux2 types for bits < 8
     for bits in min_bits..8.min(max_bits + 1) {
         let ty_name = format!("u{}", bits);
         if let Ok(ty) = syn::parse_str::<Type>(&ty_name) {
@@ -185,12 +154,12 @@ fn impl_zoruanative_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStre
         }
     }
 
-    // Add u8 if we have repr(u8) or repr(u16)
+    // u8
     if min_bits <= 8 && max_bits >= 8 {
         all_types.push((syn::parse_str("u8").unwrap(), false, 8));
     }
 
-    // Add ux2 types for bits 9-15 if repr(u16)
+    // ux2 types 9-15 for repr(u16)
     if max_bits >= 16 {
         for bits in 9.max(min_bits)..16 {
             let ty_name = format!("u{}", bits);
@@ -200,18 +169,15 @@ fn impl_zoruanative_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStre
         }
     }
 
-    // Add u16 and endian variants if repr(u16)
+    // u16 + endian variants
     if min_bits <= 16 && max_bits >= 16 {
         all_types.push((syn::parse_str("u16").unwrap(), false, 16));
         all_types.push((syn::parse_str("u16_le").unwrap(), true, 16));
         all_types.push((syn::parse_str("u16_be").unwrap(), true, 16));
     }
 
-    // Also add endian variants for larger types when using native primitives
-    // u32_le/be and u64_le/be - these allow enums to be used where the storage
-    // is wider than needed (like padding fields)
+    // Wider types
     if max_bits >= 8 {
-        // These are always fallible since variant_count << 2^32 or 2^64
         all_types.push((syn::parse_str("u32").unwrap(), false, 32));
         all_types.push((syn::parse_str("u32_le").unwrap(), true, 32));
         all_types.push((syn::parse_str("u32_be").unwrap(), true, 32));
@@ -222,49 +188,60 @@ fn impl_zoruanative_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStre
 
     let mut impls = quote! {};
 
-    for (target_ty, is_endian, bits) in all_types {
-        // Determine if this impl is fallible:
-        // Fallible when variant_count < 2^bits (not all bit patterns are valid)
+    for (target_ty, is_endian, bits) in &all_types {
+        let bits = *bits;
         let is_fallible = if bits >= 64 {
-            true // Always fallible for 64-bit (can't have 2^64 variants)
+            true
         } else {
             variant_count < (1usize << bits)
         };
 
-        // Get the storage value ready for matching - needs to become cast_repr type
-        let storage_val = if is_endian {
-            // Endian types have .value() method returning native primitive
-            quote! { (storage.value() as #cast_repr) }
-        } else if is_primitive(&target_ty) {
-            // Native primitives may be wider than cast_repr, need explicit cast
-            quote! { (storage as #cast_repr) }
+        // For the read path: extract the raw value for matching
+        let read_val = if *is_endian {
+            quote! { (zorua::bits::read_u64(src, bit_offset, #bits) as #cast_repr) }
         } else {
-            // ux2 types - convert via Into to cast_repr
-            quote! { #cast_repr::from(storage) }
+            quote! { (zorua::bits::read_u64(src, bit_offset, #bits) as #cast_repr) }
         };
 
-        // Convert from enum to storage type - widen if necessary
-        let to_storage = if is_endian {
-            quote! { #target_ty::new(self as #cast_repr as _) }
-        } else if !is_primitive(&target_ty) {
-            quote! { #target_ty::new(self as #cast_repr as _) } // ux2 types
+        // For the write path: convert enum to bits
+        // Use unsafe transmute of the discriminant to handle non-Copy enums
+        let write_val = quote! {
+            unsafe { *<*const Self>::cast::<#cast_repr>(self) as u64 }
+        };
+
+        // try_read_bits for fallible
+        let try_read_impl = if is_fallible {
+            quote! {
+                fn try_read_bits(src: &[u8], bit_offset: usize) -> Result<Self, ()> {
+                    let raw = #read_val;
+                    match raw {
+                        #try_match_arms
+                        _ => Err(()),
+                    }
+                }
+            }
         } else {
-            quote! { (self as #cast_repr) as #target_ty }
+            // For infallible, try_read_bits delegates to read_bits (default)
+            quote! {}
         };
 
         impls.extend(quote! {
-            impl #impl_generics ZoruaNative<#target_ty> for #ident #type_generics #where_clause {
+            impl #impl_generics Zorua<#target_ty> for #ident #type_generics #where_clause {
+                const BITS: usize = #bits;
                 const IS_FALLIBLE: bool = #is_fallible;
 
-                fn try_from_storage(storage: #target_ty) -> Result<Self, #target_ty> {
-                    match #storage_val as #cast_repr {
+                fn read_bits(src: &[u8], bit_offset: usize) -> Self {
+                    let raw = #read_val;
+                    match raw {
                         #match_arms
-                        _ => Err(storage),
+                        _ => panic!("Invalid discriminant"),
                     }
                 }
 
-                fn to_storage(self) -> #target_ty {
-                    #to_storage
+                #try_read_impl
+
+                fn write_bits(&self, dst: &mut [u8], bit_offset: usize) {
+                    zorua::bits::write_u64(dst, bit_offset, #bits, #write_val);
                 }
             }
         });
@@ -273,33 +250,29 @@ fn impl_zoruanative_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStre
     Ok(impls.into())
 }
 
-fn impl_zoruanative_struct(
+fn impl_zorua_struct(
     ast: &DeriveInput,
     data: &DataStruct,
 ) -> Result<TokenStream, syn::Error> {
-    // Must be a newtype (single field)
     if data.fields.len() != 1 {
         return Err(syn::Error::new_spanned(
             &ast.ident,
-            "ZoruaNative can only be derived for structs with exactly one field (newtypes)",
+            "Zorua can only be derived for structs with exactly one field (newtypes)",
         ));
     }
 
     let field0 = data.fields.iter().next().unwrap();
-
-    // Must be a tuple struct
     if field0.ident.is_some() {
         return Err(syn::Error::new_spanned(
             field0,
-            "ZoruaNative can only be derived for tuple structs (use `struct Name(T)` syntax)",
+            "Zorua can only be derived for tuple structs (use `struct Name(T)` syntax)",
         ));
     }
 
-    // Must be #[repr(transparent)]
     if !get_repr_state(&ast.attrs)?.repr_transparent {
         return Err(syn::Error::new_spanned(
             &ast.ident,
-            "ZoruaNative requires #[repr(transparent)] for newtype structs",
+            "Zorua requires #[repr(transparent)] for newtype structs",
         ));
     }
 
@@ -308,44 +281,90 @@ fn impl_zoruanative_struct(
     let generic_params = &ast.generics.params;
     let (_, type_generics, where_clause) = ast.generics.split_for_impl();
 
-    // Generate impl that delegates to inner type
-    // Uses a generic Storage parameter bound by inner type's ZoruaNative impl
-    let output = quote! {
-        impl<Storage, #generic_params> ZoruaNative<Storage> for #ident #type_generics
+    // Identity impl: Zorua<Self> delegates to inner type's Zorua<Inner>
+    let identity_impl = quote! {
+        impl<#generic_params> Zorua<#ident #type_generics> for #ident #type_generics
         where
-            #wrapped_ty: ZoruaNative<Storage>,
-            Storage: Clone,
+            #wrapped_ty: Zorua<#wrapped_ty>,
             #where_clause
         {
-            // Delegate fallibility to the wrapped type
-            const IS_FALLIBLE: bool = <#wrapped_ty as ZoruaNative<Storage>>::IS_FALLIBLE;
+            const BITS: usize = <#wrapped_ty as Zorua<#wrapped_ty>>::BITS;
+            const IS_FALLIBLE: bool = <#wrapped_ty as Zorua<#wrapped_ty>>::IS_FALLIBLE;
 
-            fn try_from_storage(storage: Storage) -> Result<Self, Storage> {
-                <#wrapped_ty as ZoruaNative<Storage>>::try_from_storage(storage)
-                    .map(Self)
+            fn read_bits(src: &[u8], bit_offset: usize) -> Self {
+                Self(<#wrapped_ty as Zorua<#wrapped_ty>>::read_bits(src, bit_offset))
             }
 
-            fn to_storage(self) -> Storage {
-                <#wrapped_ty as ZoruaNative<Storage>>::to_storage(self.0)
+            fn try_read_bits(src: &[u8], bit_offset: usize) -> Result<Self, ()> {
+                <#wrapped_ty as Zorua<#wrapped_ty>>::try_read_bits(src, bit_offset).map(Self)
+            }
+
+            fn write_bits(&self, dst: &mut [u8], bit_offset: usize) {
+                <#wrapped_ty as Zorua<#wrapped_ty>>::write_bits(&self.0, dst, bit_offset);
             }
         }
+    };
+
+    // Delegation impls for known storage types.
+    // Only generated for generic newtypes (has type parameters).
+    // For concrete newtypes (no generics), Rust rejects conditional impls
+    // with provably-unsatisfied bounds (issue #48214), so we skip them.
+    let mut delegation_impls = quote! {};
+
+    if !ast.generics.params.is_empty() {
+        let storage_types: &[&str] = &[
+            "bool",
+            "u1", "u2", "u3", "u4", "u5", "u6", "u7",
+            "u8",
+            "u9", "u10", "u11", "u12", "u13", "u14", "u15",
+            "u16",
+            "u17", "u18", "u19", "u20", "u21", "u22", "u23", "u24",
+            "u25", "u26", "u27", "u28", "u29", "u30", "u31",
+            "u32", "u64",
+            "u16_le", "u16_be",
+            "u32_le", "u32_be",
+            "u64_le", "u64_be",
+        ];
+
+        for ty_name in storage_types {
+            let storage_ty: Type = syn::parse_str(ty_name).unwrap();
+
+            delegation_impls.extend(quote! {
+                impl<#generic_params> Zorua<#storage_ty> for #ident #type_generics
+                where
+                    #wrapped_ty: Zorua<#storage_ty>,
+                    #where_clause
+                {
+                    const BITS: usize = <#wrapped_ty as Zorua<#storage_ty>>::BITS;
+                    const IS_FALLIBLE: bool = <#wrapped_ty as Zorua<#storage_ty>>::IS_FALLIBLE;
+
+                    fn read_bits(src: &[u8], bit_offset: usize) -> Self {
+                        Self(<#wrapped_ty as Zorua<#storage_ty>>::read_bits(src, bit_offset))
+                    }
+
+                    fn try_read_bits(src: &[u8], bit_offset: usize) -> Result<Self, ()> {
+                        <#wrapped_ty as Zorua<#storage_ty>>::try_read_bits(src, bit_offset).map(Self)
+                    }
+
+                    fn write_bits(&self, dst: &mut [u8], bit_offset: usize) {
+                        <#wrapped_ty as Zorua<#storage_ty>>::write_bits(&self.0, dst, bit_offset);
+                    }
+                }
+            });
+        }
+    }
+
+    let output = quote! {
+        #identity_impl
+        #delegation_impls
     };
 
     Ok(output.into())
 }
 
-// --------------
-// Helper fns
-// --------------
-fn is_primitive(ty: &Type) -> bool {
-    if let Type::Path(tp) = ty {
-        if let Some(segment) = tp.path.segments.last() {
-            let name = segment.ident.to_string();
-            return matches!(name.as_str(), "u8" | "u16" | "u32" | "u64");
-        }
-    }
-    false
-}
+// =====================================================================
+// Helper functions
+// =====================================================================
 
 fn deconstruct_array(ty: &Type) -> Option<&Type> {
     if let Type::Array(ta) = ty {
@@ -396,31 +415,22 @@ fn get_repr_state(attrs: &[Attribute]) -> Result<ReprState, syn::Error> {
     for attr in attrs {
         if attr.path().is_ident("repr") {
             attr.parse_nested_meta(|meta| {
-                // #[repr(C)]
                 if meta.path.is_ident("C") {
                     repr_c = true;
                     return Ok(());
                 }
-
-                // #[repr(u8)]
                 if meta.path.is_ident("u8") {
                     repr_u8 = true;
                     return Ok(());
                 }
-
-                // #[repr(u16)]
                 if meta.path.is_ident("u16") {
                     repr_u16 = true;
                     return Ok(());
                 }
-
-                // #[repr(transparent)]
                 if meta.path.is_ident("transparent") {
                     repr_transparent = true;
                     return Ok(());
                 }
-
-                // #[repr(packed)] or #[repr(packed(N))], omitted N means 1
                 if meta.path.is_ident("packed") {
                     if meta.input.peek(token::Paren) {
                         let content;
@@ -433,8 +443,7 @@ fn get_repr_state(attrs: &[Attribute]) -> Result<ReprState, syn::Error> {
                     }
                     return Ok(());
                 }
-
-                Ok(()) //ignore unparsed reprs
+                Ok(())
             })?;
         }
     }
@@ -448,27 +457,24 @@ fn get_repr_state(attrs: &[Attribute]) -> Result<ReprState, syn::Error> {
     })
 }
 
+// =====================================================================
+// bitfields! proc macro
+// =====================================================================
 
+mod kw {
+    syn::custom_keyword!(stride);
+    syn::custom_keyword!(bits);
+}
 
-// ============================================================================
-// bitfields! proc macro for struct transformation
-// ============================================================================
-
-use syn::{
-    Ident, Token, Visibility, braced,
-    parse::{Parse, ParseStream},
-    punctuated::Punctuated,
-};
-
-/// A field in the zorua struct, which may have native conversion syntax
-struct ZoruaField {
+/// A field in the zorua struct
+struct ZoruaFieldDef {
     attrs: Vec<Attribute>,
     vis: Visibility,
     name: Ident,
     native_type: Type,
-    storage_type: Type, // Same as native_type if no `as` clause
+    storage_type: Type,
     has_backing_type: bool,
-    is_fallible: bool, // #[fallible] attribute present
+    is_fallible: bool,
     bitfield_subfields: Option<Vec<BitfieldSubfield>>,
 }
 
@@ -477,21 +483,20 @@ struct BitfieldSubfield {
     vis: Visibility,
     name: Ident,
     native_type: proc_macro2::TokenStream,
-    storage_type: proc_macro2::TokenStream, // Same as native_type if no `as` clause
+    storage_type: proc_macro2::TokenStream,
     has_backing_type: bool,
-    is_fallible: bool,     // #[fallible] attribute present
-    is_zeroedoption: bool, // #[zeroedoption] attribute present
-    bit_offset: LitInt,
+    is_fallible: bool,
+    is_zeroedoption: bool,
+    bit_offset: Expr,
+    stride: Option<Expr>,
 }
 
-impl Parse for ZoruaField {
+impl Parse for ZoruaFieldDef {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let all_attrs = input.call(Attribute::parse_outer)?;
 
-        // Check for and extract field-level attributes
         let is_fallible = all_attrs.iter().any(|a| a.path().is_ident("fallible"));
 
-        // Filter out processed attributes - they shouldn't appear in generated code
         let attrs: Vec<_> = all_attrs
             .into_iter()
             .filter(|a| !a.path().is_ident("fallible") && !a.path().is_ident("zeroedoption"))
@@ -501,32 +506,24 @@ impl Parse for ZoruaField {
         let name: Ident = input.parse()?;
         input.parse::<Token![:]>()?;
 
-        // Parse the native type by collecting tokens until we hit `as`, `{`, or end
-        // We can't use Type::parse() because it doesn't handle `as` keyword properly
         let mut native_type_tokens = proc_macro2::TokenStream::new();
-        let mut depth = 0; // Track <> nesting
+        let mut depth = 0;
 
         loop {
             if input.is_empty() {
                 break;
             }
-
-            // Check for terminators (at depth 0)
             if depth == 0 {
                 if input.peek(Token![as]) || input.peek(syn::token::Brace) || input.peek(Token![,])
                 {
                     break;
                 }
             }
-
-            // Track <> nesting for generics like Fallible<Language, u8>
             if input.peek(Token![<]) {
                 depth += 1;
             } else if input.peek(Token![>]) {
                 depth -= 1;
             }
-
-            // Consume next token
             let tt: proc_macro2::TokenTree = input.parse()?;
             native_type_tokens.extend(std::iter::once(tt));
         }
@@ -535,7 +532,6 @@ impl Parse for ZoruaField {
             syn::Error::new(name.span(), format!("Failed to parse native type: {}", e))
         })?;
 
-        // Check for `as StorageType`
         let (storage_type, has_backing_type) = if input.peek(Token![as]) {
             input.parse::<Token![as]>()?;
             let storage: Type = input.parse()?;
@@ -544,7 +540,6 @@ impl Parse for ZoruaField {
             (native_type.clone(), false)
         };
 
-        // Check for bitfield subfields { ... }
         let bitfield_subfields = if input.peek(syn::token::Brace) {
             let content;
             braced!(content in input);
@@ -555,7 +550,7 @@ impl Parse for ZoruaField {
             None
         };
 
-        Ok(ZoruaField {
+        Ok(ZoruaFieldDef {
             attrs,
             vis,
             name,
@@ -572,11 +567,9 @@ impl Parse for BitfieldSubfield {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let all_attrs = input.call(Attribute::parse_outer)?;
 
-        // Check for and extract field-level attributes
         let is_fallible = all_attrs.iter().any(|a| a.path().is_ident("fallible"));
         let is_zeroedoption = all_attrs.iter().any(|a| a.path().is_ident("zeroedoption"));
 
-        // Filter out processed attributes - they shouldn't appear in generated code
         let attrs: Vec<_> = all_attrs
             .into_iter()
             .filter(|a| !a.path().is_ident("fallible") && !a.path().is_ident("zeroedoption"))
@@ -586,39 +579,30 @@ impl Parse for BitfieldSubfield {
         let name: Ident = input.parse()?;
         input.parse::<Token![:]>()?;
 
-        // Parse the type - collect tokens until we hit @ or `as`
         let mut native_type_tokens = proc_macro2::TokenStream::new();
-        let mut depth = 0; // Track <> nesting
+        let mut depth = 0;
 
         loop {
             if input.is_empty() {
                 return Err(syn::Error::new(name.span(), "Expected @ after type"));
             }
-
-            // Check for terminators (at depth 0)
             if depth == 0 {
                 if input.peek(Token![as]) || input.peek(Token![@]) {
                     break;
                 }
             }
-
-            // Track <> nesting for generics like Result<Language, u8>
             if input.peek(Token![<]) {
                 depth += 1;
             } else if input.peek(Token![>]) {
                 depth -= 1;
             }
-
-            // Consume next token
             let tt: proc_macro2::TokenTree = input.parse()?;
             native_type_tokens.extend(std::iter::once(tt));
         }
 
-        // Check for `as StorageType`
         let (storage_type, has_backing_type) = if input.peek(Token![as]) {
             input.parse::<Token![as]>()?;
 
-            // Parse storage type tokens until @
             let mut storage_tokens = proc_macro2::TokenStream::new();
             let mut depth = 0;
 
@@ -629,17 +613,14 @@ impl Parse for BitfieldSubfield {
                         "Expected @ after storage type",
                     ));
                 }
-
                 if depth == 0 && input.peek(Token![@]) {
                     break;
                 }
-
                 if input.peek(Token![<]) {
                     depth += 1;
                 } else if input.peek(Token![>]) {
                     depth -= 1;
                 }
-
                 let tt: proc_macro2::TokenTree = input.parse()?;
                 storage_tokens.extend(std::iter::once(tt));
             }
@@ -650,7 +631,14 @@ impl Parse for BitfieldSubfield {
         };
 
         input.parse::<Token![@]>()?;
-        let bit_offset: LitInt = input.parse()?;
+        let bit_offset: Expr = input.parse()?;
+
+        let stride = if input.peek(kw::stride) {
+            input.parse::<kw::stride>()?;
+            Some(input.parse::<Expr>()?)
+        } else {
+            None
+        };
 
         Ok(BitfieldSubfield {
             attrs,
@@ -662,19 +650,21 @@ impl Parse for BitfieldSubfield {
             is_fallible,
             is_zeroedoption,
             bit_offset,
+            stride,
         })
     }
 }
 
-struct ZoruaStruct {
+struct ZoruaStructDef {
     attrs: Vec<Attribute>,
     vis: Visibility,
     name: Ident,
     generics: syn::Generics,
-    fields: Vec<ZoruaField>,
+    bits_annotation: Option<Expr>,
+    fields: Vec<ZoruaFieldDef>,
 }
 
-impl Parse for ZoruaStruct {
+impl Parse for ZoruaStructDef {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let attrs = input.call(Attribute::parse_outer)?;
         let vis: Visibility = input.parse()?;
@@ -682,48 +672,35 @@ impl Parse for ZoruaStruct {
         let name: Ident = input.parse()?;
         let generics: syn::Generics = input.parse()?;
 
+        // Parse optional (bits EXPR) annotation
+        let bits_annotation = if input.peek(token::Paren) {
+            let content;
+            syn::parenthesized!(content in input);
+            content.parse::<kw::bits>()?;
+            Some(content.parse::<Expr>()?)
+        } else {
+            None
+        };
+
         let content;
         braced!(content in input);
-        let fields: Punctuated<ZoruaField, Token![,]> =
-            content.parse_terminated(ZoruaField::parse, Token![,])?;
+        let fields: Punctuated<ZoruaFieldDef, Token![,]> =
+            content.parse_terminated(ZoruaFieldDef::parse, Token![,])?;
 
-        Ok(ZoruaStruct {
+        Ok(ZoruaStructDef {
             attrs,
             vis,
             name,
             generics,
+            bits_annotation,
             fields: fields.into_iter().collect(),
         })
     }
 }
 
-/// The `bitfields!` proc macro transforms a struct with zorua field syntax.
-///
-/// # Field Syntax
-///
-/// - Regular field: `pub field: Type`
-///
-/// - Bitfield container: `field: Type { subfield: SubType@bit_offset, ... }`
-///
-/// # Example
-///
-/// ```ignore
-/// bitfields! {
-///     #[repr(C)]
-///     #[derive(ZoruaField, Clone, Debug)]
-///     pub struct Pokemon {
-///         pub pid: u32_le,
-///         pub tid: u32_le,
-///         flags: u8 {
-///             pub is_egg: bool@0,
-///             pub has_nickname: bool@1,
-///         },
-///     }
-/// }
-/// ```
 #[proc_macro]
 pub fn bitfields(item: TokenStream) -> TokenStream {
-    let input = match syn::parse::<ZoruaStruct>(item) {
+    let input = match syn::parse::<ZoruaStructDef>(item) {
         Ok(parsed) => parsed,
         Err(e) => {
             return e.into_compile_error().into();
@@ -736,18 +713,19 @@ pub fn bitfields(item: TokenStream) -> TokenStream {
     }
 }
 
-fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> {
-    let ZoruaStruct {
+fn generate_zorua_struct(input: ZoruaStructDef) -> Result<TokenStream, syn::Error> {
+    let ZoruaStructDef {
         attrs,
         vis,
         name,
         generics,
+        bits_annotation,
         fields,
     } = input;
 
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-    // Generate field definitions with _raw suffix for backed fields
+    // Generate field definitions
     let field_defs: Vec<_> = fields
         .iter()
         .map(|f| {
@@ -767,7 +745,7 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
         })
         .collect();
 
-    // Generate field accessors (getter and setter) ONLY for backed fields
+    // Generate flat backed field accessors
     let accessors: Vec<_> = fields
         .iter()
         .filter(|f| f.has_backing_type)
@@ -782,35 +760,13 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
             let field_storage_type = &f.storage_type;
 
             let (getter, setter) = if let (Some(native_elem), Some(storage_elem)) = (deconstruct_array(field_native_type), deconstruct_array(field_storage_type)) {
+                // Array flat backed field
                 let is_identity = quote!(#native_elem).to_string() == quote!(#storage_elem).to_string();
-                
-                let assertion = if is_identity {
-                    if f.is_fallible {
-                         quote! {
-                            compile_error!(concat!("Field `", stringify!(#field_name), "` marked #[fallible] but native type matches storage type (infallible)."));
-                         }
-                    } else {
-                        quote! {}
-                    }
-                } else if f.is_fallible {
-                    quote! {
-                        const _: () = assert!(
-                            <#native_elem as ZoruaNative<#storage_elem>>::IS_FALLIBLE,
-                            concat!("Field `", stringify!(#field_name), "` marked #[fallible] but conversion is infallible.")
-                        );
-                    }
-                } else {
-                    quote! {
-                        const _: () = assert!(
-                            !<#native_elem as ZoruaNative<#storage_elem>>::IS_FALLIBLE,
-                            concat!("Field `", stringify!(#field_name), "` missing #[fallible] but conversion is fallible.")
-                        );
-                    }
-                };
 
-                // Array Getter
+                let assertion = gen_fallibility_assertion(f.is_fallible, is_identity, field_name, &quote!(#native_elem), &quote!(#storage_elem));
+
                 let getter = if is_identity {
-                     quote! {
+                    quote! {
                         #field_vis fn #field_name(&self, index: usize) -> #native_elem {
                             #assertion
                             self.#field_raw_name[index]
@@ -818,25 +774,24 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                     }
                 } else if f.is_fallible {
                     quote! {
-                        #field_vis fn #field_name(&self, index: usize) -> Result<#native_elem, #storage_elem> {
+                        #field_vis fn #field_name(&self, index: usize) -> Result<#native_elem, ()> {
                             #assertion
-                            let storage_val = self.#field_raw_name[index];
-                            <#native_elem as ZoruaNative<#storage_elem>>::try_from_storage(storage_val)
+                            <#native_elem as Zorua<#storage_elem>>::try_read_bits(
+                                self.#field_raw_name[index].as_bytes(), 0)
                         }
                     }
                 } else {
                     quote! {
                         #field_vis fn #field_name(&self, index: usize) -> #native_elem {
                             #assertion
-                            let storage_val = self.#field_raw_name[index];
-                            <#native_elem as ZoruaNative<#storage_elem>>::from_storage(storage_val)
+                            <#native_elem as Zorua<#storage_elem>>::read_bits(
+                                self.#field_raw_name[index].as_bytes(), 0)
                         }
                     }
                 };
 
-                // Array Setter
                 let setter = if is_identity {
-                     quote! {
+                    quote! {
                         #field_vis fn #field_setter(&mut self, index: usize, val: #native_elem) {
                             self.#field_raw_name[index] = val;
                         }
@@ -844,42 +799,20 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                 } else {
                     quote! {
                         #field_vis fn #field_setter(&mut self, index: usize, val: #native_elem) {
-                            let storage_val = <#native_elem as ZoruaNative<#storage_elem>>::to_storage(val);
-                            self.#field_raw_name[index] = storage_val;
+                            <#native_elem as Zorua<#storage_elem>>::write_bits(
+                                &val, self.#field_raw_name[index].as_bytes_mut(), 0);
                         }
                     }
                 };
                 (getter, setter)
             } else {
+                // Scalar flat backed field
                 let is_identity = quote!(#field_native_type).to_string() == quote!(#field_storage_type).to_string();
 
-                let assertion = if is_identity {
-                     if f.is_fallible {
-                         quote! {
-                            compile_error!(concat!("Field `", stringify!(#field_name), "` marked #[fallible] but native type matches storage type (infallible)."));
-                         }
-                    } else {
-                        quote! {}
-                    }
-                } else if f.is_fallible {
-                    quote! {
-                        const _: () = assert!(
-                            <#field_native_type as ZoruaNative<#field_storage_type>>::IS_FALLIBLE,
-                            concat!("Field `", stringify!(#field_name), "` marked #[fallible] but conversion is infallible.")
-                        );
-                    }
-                } else {
-                    quote! {
-                        const _: () = assert!(
-                            !<#field_native_type as ZoruaNative<#field_storage_type>>::IS_FALLIBLE,
-                            concat!("Field `", stringify!(#field_name), "` missing #[fallible] but conversion is fallible.")
-                        );
-                    }
-                };
+                let assertion = gen_fallibility_assertion(f.is_fallible, is_identity, field_name, &quote!(#field_native_type), &quote!(#field_storage_type));
 
-                // Non-Array Getter
                 let getter = if is_identity {
-                     quote! {
+                    quote! {
                         #field_vis fn #field_name(&self) -> #field_native_type {
                             #assertion
                             self.#field_raw_name()
@@ -887,23 +820,22 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                     }
                 } else if f.is_fallible {
                     quote! {
-                        #field_vis fn #field_name(&self) -> Result<#field_native_type, #field_storage_type> {
+                        #field_vis fn #field_name(&self) -> Result<#field_native_type, ()> {
                             #assertion
-                            let storage_val = self.#field_raw_name();
-                            <#field_native_type as ZoruaNative<#field_storage_type>>::try_from_storage(storage_val)
+                            <#field_native_type as Zorua<#field_storage_type>>::try_read_bits(
+                                self.#field_raw_name.as_bytes(), 0)
                         }
                     }
                 } else {
                     quote! {
                         #field_vis fn #field_name(&self) -> #field_native_type {
                             #assertion
-                            let storage_val = self.#field_raw_name();
-                            <#field_native_type as ZoruaNative<#field_storage_type>>::from_storage(storage_val)
+                            <#field_native_type as Zorua<#field_storage_type>>::read_bits(
+                                self.#field_raw_name.as_bytes(), 0)
                         }
                     }
                 };
 
-                // Non-Array Setter
                 let setter = if is_identity {
                     quote! {
                         #field_vis fn #field_setter(&mut self, val: #field_native_type) {
@@ -911,10 +843,10 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                         }
                     }
                 } else {
-                     quote! {
+                    quote! {
                         #field_vis fn #field_setter(&mut self, val: #field_native_type) {
-                            let storage_val = <#field_native_type as ZoruaNative<#field_storage_type>>::to_storage(val);
-                            self.#field_raw_setter(storage_val);
+                            <#field_native_type as Zorua<#field_storage_type>>::write_bits(
+                                &val, self.#field_raw_name.as_bytes_mut(), 0);
                         }
                     }
                 };
@@ -924,14 +856,13 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
             quote! {
                 #(#field_attrs)*
                 #getter
-
                 #(#field_attrs)*
                 #setter
             }
         })
         .collect();
 
-    // Generate raw accessors ONLY for non-array backed fields
+    // Generate raw accessors for non-array backed fields
     let raw_accessors: Vec<_> = fields
         .iter()
         .filter(|f| f.has_backing_type && deconstruct_array(&f.native_type).is_none())
@@ -947,7 +878,7 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
                 #field_vis fn #field_raw_name(&self) -> #field_storage_type {
                     self.#field_raw_name
                 }
-                
+
                 #(#field_attrs)*
                 #field_vis fn #field_raw_setter(&mut self, val: #field_storage_type) {
                     self.#field_raw_name = val;
@@ -961,339 +892,42 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
         .iter()
         .filter_map(|f| {
             f.bitfield_subfields.as_ref().map(|subfields| {
-                let container_raw_name = if f.has_backing_type {
+                let container_name = if f.has_backing_type {
                     syn::Ident::new(&format!("{}_raw", f.name), f.name.span())
                 } else {
                     f.name.clone()
                 };
 
                 subfields.iter().map(move |sf| {
-                    let sf_attrs = &sf.attrs;
-                    let sf_vis = &sf.vis;
-                    let sf_name = &sf.name;
-                    let sf_setter = prefixed_name("set_", &sf.name, "");
-                    let sf_native_type_ts = &sf.native_type;
-                    let sf_storage_type_ts = &sf.storage_type;
-                    let sf_offset = &sf.bit_offset;
-
-                    // Parse the types from TokenStreams to check for arrays
-                    let sf_native_type: Type = syn::parse2(sf_native_type_ts.clone()).unwrap();
-                    let sf_storage_type: Type = syn::parse2(sf_storage_type_ts.clone()).unwrap();
-
-                    if sf.has_backing_type {
-                        // Aliased bitfield subfield: generate both aliased and _raw accessors
-                        let sf_raw_name = syn::Ident::new(&format!("{}_raw", sf.name), sf.name.span());
-                        let sf_raw_setter = prefixed_name("set_", &sf.name, "_raw");
-
-                        if let (Some(native_elem), Some(storage_elem)) = (deconstruct_array(&sf_native_type), deconstruct_array(&sf_storage_type)) {
-                            // Array-based bitfield subfield: generate indexed accessors
-                            let is_identity = quote!(#native_elem).to_string() == quote!(#storage_elem).to_string();
-
-                            let assertion = if is_identity {
-                                if sf.is_fallible {
-                                     quote! {
-                                        compile_error!(concat!("Field `", stringify!(#sf_name), "` marked #[fallible] but native type matches storage type (infallible)."));
-                                     }
-                                } else {
-                                    quote! {}
-                                }
-                            } else if sf.is_fallible {
-                                quote! {
-                                    const _: () = assert!(
-                                        <#native_elem as ZoruaNative<#storage_elem>>::IS_FALLIBLE,
-                                        concat!("Field `", stringify!(#sf_name), "` marked #[fallible] but conversion is infallible.")
-                                    );
-                                }
-                            } else {
-                                quote! {
-                                    const _: () = assert!(
-                                        !<#native_elem as ZoruaNative<#storage_elem>>::IS_FALLIBLE,
-                                        concat!("Field `", stringify!(#sf_name), "` missing #[fallible] but conversion is fallible.")
-                                    );
-                                }
-                            };
-
-                            let getter = if is_identity {
-                                quote! {
-                                    #sf_vis fn #sf_name(&self, index: usize) -> #native_elem {
-                                        #assertion
-                                        let b_bits = <#native_elem as BackingStorage>::BITS;
-                                        self.#container_raw_name.get_bits_at::<#native_elem>(#sf_offset + index * b_bits)
-                                    }
-                                }
-                            } else if sf.is_fallible {
-                                quote! {
-                                    #sf_vis fn #sf_name(&self, index: usize) -> Result<#native_elem, #storage_elem> {
-                                        #assertion
-                                        let b_bits = <#storage_elem as BackingStorage>::BITS;
-                                        let storage_val = self.#container_raw_name.get_bits_at::<#storage_elem>(#sf_offset + index * b_bits);
-                                        <#native_elem as ZoruaNative<#storage_elem>>::try_from_storage(storage_val)
-                                    }
-                                }
-                            } else {
-                                quote! {
-                                    #sf_vis fn #sf_name(&self, index: usize) -> #native_elem {
-                                        #assertion
-                                        let b_bits = <#storage_elem as BackingStorage>::BITS;
-                                        let storage_val = self.#container_raw_name.get_bits_at::<#storage_elem>(#sf_offset + index * b_bits);
-                                        <#native_elem as ZoruaNative<#storage_elem>>::from_storage(storage_val)
-                                    }
-                                }
-                            };
-
-                            let setter = if is_identity {
-                                 quote! {
-                                    #sf_vis fn #sf_setter(&mut self, index: usize, val: #native_elem) {
-                                        let b_bits = <#native_elem as BackingStorage>::BITS;
-                                        self.#container_raw_name.set_bits_at::<#native_elem>(val, #sf_offset + index * b_bits);
-                                    }
-                                }
-                            } else {
-                                quote! {
-                                    #sf_vis fn #sf_setter(&mut self, index: usize, val: #native_elem) {
-                                        let b_bits = <#storage_elem as BackingStorage>::BITS;
-                                        let storage_val = <#native_elem as ZoruaNative<#storage_elem>>::to_storage(val);
-                                        self.#container_raw_name.set_bits_at::<#storage_elem>(storage_val, #sf_offset + index * b_bits);
-                                    }
-                                }
-                            };
-
-                            quote! {
-                                #(#sf_attrs)*
-                                #getter
-                                #(#sf_attrs)*
-                                #setter
-
-                                // Raw accessors for the whole array
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
-                                    self.#container_raw_name.get_bits_at::<#sf_storage_type>(#sf_offset)
-                                }
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
-                                    self.#container_raw_name.set_bits_at::<#sf_storage_type>(val, #sf_offset);
-                                }
-                            }
-                        } else if sf.is_zeroedoption {
-                            // Non-fallible zeroedoption accessor: returns Option<NativeType>
-                            let is_identity = quote!(#sf_native_type).to_string() == quote!(#sf_storage_type).to_string();
-                            
-                            if is_identity {
-                                quote! {
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_name(&self) -> Option<#sf_native_type> {
-                                        let storage_val = self.#sf_raw_name();
-                                        if storage_val == <#sf_storage_type as BackingStorage>::ZERO {
-                                            None
-                                        } else {
-                                            Some(storage_val)
-                                        }
-                                    }
-
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_setter(&mut self, val: Option<#sf_native_type>) {
-                                        let storage_val = match val {
-                                            None => <#sf_storage_type as BackingStorage>::ZERO,
-                                            Some(v) => v,
-                                        };
-                                        self.#sf_raw_setter(storage_val);
-                                    }
-                                    
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
-                                        self.#container_raw_name.get_bits_at::<#sf_storage_type>(#sf_offset)
-                                    }
-
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
-                                        self.#container_raw_name.set_bits_at::<#sf_storage_type>(val, #sf_offset);
-                                    }
-                                }
-                            } else {
-                                quote! {
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_name(&self) -> Option<#sf_native_type> {
-                                        let storage_val = self.#sf_raw_name();
-                                        if storage_val == <#sf_storage_type as BackingStorage>::ZERO {
-                                            None
-                                        } else {
-                                            Some(<#sf_native_type as ZoruaNative<#sf_storage_type>>::from_storage(storage_val))
-                                        }
-                                    }
-
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_setter(&mut self, val: Option<#sf_native_type>) {
-                                        let storage_val = match val {
-                                            None => <#sf_storage_type as BackingStorage>::ZERO,
-                                            Some(v) => <#sf_native_type as ZoruaNative<#sf_storage_type>>::to_storage(v),
-                                        };
-                                        self.#sf_raw_setter(storage_val);
-                                    }
-
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
-                                        self.#container_raw_name.get_bits_at::<#sf_storage_type>(#sf_offset)
-                                    }
-
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
-                                        self.#container_raw_name.set_bits_at::<#sf_storage_type>(val, #sf_offset);
-                                    }
-                                }
-                            }
-                        } else if sf.is_fallible {
-                            let is_identity = quote!(#sf_native_type).to_string() == quote!(#sf_storage_type).to_string();
-                            if is_identity {
-                                 quote! {
-                                    compile_error!(concat!("Field `", stringify!(#sf_name), "` marked #[fallible] but native type matches storage type (infallible)."));
-                                 }
-                            } else {
-                                quote! {
-                                    // Fallible aliased getter - returns Result<NativeType, StorageType>
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_name(&self) -> Result<#sf_native_type, #sf_storage_type> {
-                                        const _: () = assert!(
-                                            <#sf_native_type as ZoruaNative<#sf_storage_type>>::IS_FALLIBLE,
-                                            concat!("Field `", stringify!(#sf_name), "` marked #[fallible] but conversion is infallible.")
-                                        );
-                                        let storage_val = self.#sf_raw_name();
-                                        <#sf_native_type as ZoruaNative<#sf_storage_type>>::try_from_storage(storage_val)
-                                    }
-
-                                    // Aliased setter
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_setter(&mut self, val: #sf_native_type) {
-                                        let storage_val = <#sf_native_type as ZoruaNative<#sf_storage_type>>::to_storage(val);
-                                        self.#sf_raw_setter(storage_val);
-                                    }
-                                    
-                                    // Raw getter - returns StorageType directly
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
-                                        self.#container_raw_name.get_bits_at::<#sf_storage_type>(#sf_offset)
-                                    }
-
-                                    // Raw setter
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
-                                        self.#container_raw_name.set_bits_at::<#sf_storage_type>(val, #sf_offset);
-                                    }
-                                }
-                            }
-                        } else {
-                            let is_identity = quote!(#sf_native_type).to_string() == quote!(#sf_storage_type).to_string();
-                            if is_identity {
-                                quote! {
-                                    // Identity accessors
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_name(&self) -> #sf_native_type {
-                                        const _: () = assert!(
-                                            !<#sf_native_type as ZoruaNative<#sf_storage_type>>::IS_FALLIBLE,
-                                            concat!("Field `", stringify!(#sf_name), "` missing #[fallible] but conversion is fallible.")
-                                        );
-                                        self.#sf_raw_name()
-                                    }
-    
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_setter(&mut self, val: #sf_native_type) {
-                                        self.#sf_raw_setter(val);
-                                    }
-                                    
-                                    // Raw getter - returns StorageType directly
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
-                                        self.#container_raw_name.get_bits_at::<#sf_storage_type>(#sf_offset)
-                                    }
-    
-                                    // Raw setter
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
-                                        self.#container_raw_name.set_bits_at::<#sf_storage_type>(val, #sf_offset);
-                                    }
-                                }
-                            } else {
-                                quote! {
-                                    // Aliased getter - returns NativeType via ZoruaNative<StorageType>
-                                    #(#sf_attrs)*
-                                        #sf_vis fn #sf_name(&self) -> #sf_native_type {
-                                            const _: () = assert!(
-                                                !<#sf_native_type as ZoruaNative<#sf_storage_type>>::IS_FALLIBLE,
-                                                concat!("Field `", stringify!(#sf_name), "` missing #[fallible] but conversion is fallible.")
-                                            );
-                                            let storage_val = self.#sf_raw_name();
-                                            <#sf_native_type as ZoruaNative<#sf_storage_type>>::from_storage(storage_val)
-                                        }
-    
-                                    // Aliased setter
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_setter(&mut self, val: #sf_native_type) {
-                                        let storage_val = <#sf_native_type as ZoruaNative<#sf_storage_type>>::to_storage(val);
-                                        self.#sf_raw_setter(storage_val);
-                                    }
-                                    
-                                    // Raw getter - returns StorageType directly
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type {
-                                        self.#container_raw_name.get_bits_at::<#sf_storage_type>(#sf_offset)
-                                    }
-    
-                                    // Raw setter
-                                    #(#sf_attrs)*
-                                    #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type) {
-                                        self.#container_raw_name.set_bits_at::<#sf_storage_type>(val, #sf_offset);
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // Direct bitfield subfield (no `as`): generate direct accessors
-                        if let (Some(native_elem), Some(_)) = (deconstruct_array(&sf_native_type), deconstruct_array(&sf_storage_type)) {
-                            let sf_raw_name = syn::Ident::new(&format!("{}_raw", sf.name), sf.name.span());
-                            let sf_raw_setter = prefixed_name("set_", &sf.name, "_raw");
-                            
-                            quote! {
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_name(&self, index: usize) -> #native_elem {
-                                    let b_bits = <#native_elem as BackingStorage>::BITS;
-                                    self.#container_raw_name.get_bits_at::<#native_elem>(#sf_offset + index * b_bits)
-                                }
-
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_setter(&mut self, index: usize, val: #native_elem) {
-                                    let b_bits = <#native_elem as BackingStorage>::BITS;
-                                    self.#container_raw_name.set_bits_at::<#native_elem>(val, #sf_offset + index * b_bits);
-                                }
-
-                                // Raw accessors for the whole array
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_raw_name(&self) -> #sf_native_type {
-                                    self.#container_raw_name.get_bits_at::<#sf_native_type>(#sf_offset)
-                                }
-                                
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_raw_setter(&mut self, val: #sf_native_type) {
-                                    self.#container_raw_name.set_bits_at::<#sf_native_type>(val, #sf_offset);
-                                }
-                            }
-                        } else {
-                            quote! {
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_name(&self) -> #sf_native_type {
-                                    self.#container_raw_name.get_bits_at::<#sf_native_type>(#sf_offset)
-                                }
-
-                                #(#sf_attrs)*
-                                #sf_vis fn #sf_setter(&mut self, val: #sf_native_type) {
-                                    self.#container_raw_name.set_bits_at::<#sf_native_type>(val, #sf_offset);
-                                }
-                            }
-                        }
-                    }
+                    generate_subfield_accessor(&container_name, sf)
                 })
             })
         })
         .flatten()
         .collect();
+
+    // Generate Zorua<Self> impl from bits annotation
+    let bits_impl = if let Some(ref bits_expr) = bits_annotation {
+        quote! {
+            impl #impl_generics Zorua<#name #ty_generics> for #name #ty_generics #where_clause {
+                const BITS: usize = #bits_expr;
+                const IS_FALLIBLE: bool = false;
+
+                fn read_bits(src: &[u8], bit_offset: usize) -> Self {
+                    // SAFETY: All-zeros is valid for POD types used with bits annotation
+                    let mut s: Self = unsafe { core::mem::zeroed() };
+                    zorua::bits::copy(src, bit_offset, s.as_bytes_mut(), 0, #bits_expr);
+                    s
+                }
+
+                fn write_bits(&self, dst: &mut [u8], bit_offset: usize) {
+                    zorua::bits::copy(self.as_bytes(), 0, dst, bit_offset, #bits_expr);
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
 
     let output = quote! {
         #(#attrs)*
@@ -1306,7 +940,407 @@ fn generate_zorua_struct(input: ZoruaStruct) -> Result<TokenStream, syn::Error> 
             #(#raw_accessors)*
             #(#bitfield_accessors)*
         }
+
+        #bits_impl
     };
 
     Ok(output.into())
+}
+
+/// Generate a fallibility assertion for a field.
+fn gen_fallibility_assertion(
+    is_fallible: bool,
+    is_identity: bool,
+    field_name: &Ident,
+    native_type: &proc_macro2::TokenStream,
+    storage_type: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    if is_identity {
+        if is_fallible {
+            quote! {
+                compile_error!(concat!("Field `", stringify!(#field_name), "` marked #[fallible] but native type matches storage type (infallible)."));
+            }
+        } else {
+            quote! {}
+        }
+    } else if is_fallible {
+        quote! {
+            const { assert!(
+                <#native_type as Zorua<#storage_type>>::IS_FALLIBLE,
+                concat!("Field `", stringify!(#field_name), "` marked #[fallible] but conversion is infallible.")
+            ) };
+        }
+    } else {
+        quote! {
+            const { assert!(
+                !<#native_type as Zorua<#storage_type>>::IS_FALLIBLE,
+                concat!("Field `", stringify!(#field_name), "` missing #[fallible] but conversion is fallible.")
+            ) };
+        }
+    }
+}
+
+/// Generate accessor methods for a bitfield subfield.
+fn generate_subfield_accessor(
+    container_name: &Ident,
+    sf: &BitfieldSubfield,
+) -> proc_macro2::TokenStream {
+    let sf_native_type_ts = &sf.native_type;
+    let sf_storage_type_ts = &sf.storage_type;
+
+    let sf_native_type: Type = syn::parse2(sf_native_type_ts.clone()).unwrap();
+    let sf_storage_type: Type = syn::parse2(sf_storage_type_ts.clone()).unwrap();
+
+    let is_identity = quote!(#sf_native_type_ts).to_string() == quote!(#sf_storage_type_ts).to_string();
+
+    if let Some(native_elem) = deconstruct_array(&sf_native_type) {
+        // Array subfield
+        let storage_elem = if sf.has_backing_type {
+            deconstruct_array(&sf_storage_type).unwrap()
+        } else {
+            native_elem
+        };
+        let elem_is_identity = quote!(#native_elem).to_string() == quote!(#storage_elem).to_string();
+
+        generate_array_subfield_accessor(
+            container_name, sf, native_elem, storage_elem, elem_is_identity,
+        )
+    } else if sf.is_zeroedoption {
+        // Zeroedoption subfield
+        generate_zeroedoption_subfield_accessor(container_name, sf, is_identity)
+    } else {
+        // Scalar subfield
+        generate_scalar_subfield_accessor(container_name, sf, is_identity)
+    }
+}
+
+fn generate_scalar_subfield_accessor(
+    container_name: &Ident,
+    sf: &BitfieldSubfield,
+    is_identity: bool,
+) -> proc_macro2::TokenStream {
+    let sf_attrs = &sf.attrs;
+    let sf_vis = &sf.vis;
+    let sf_name = &sf.name;
+    let sf_setter = prefixed_name("set_", &sf.name, "");
+    let sf_native_type_ts = &sf.native_type;
+    let sf_storage_type_ts = &sf.storage_type;
+    let sf_offset = &sf.bit_offset;
+
+    let assertion = gen_fallibility_assertion(
+        sf.is_fallible,
+        is_identity,
+        sf_name,
+        sf_native_type_ts,
+        sf_storage_type_ts,
+    );
+
+    if sf.has_backing_type {
+        // With `as` — has raw accessors
+        let sf_raw_name = syn::Ident::new(&format!("{}_raw", sf.name), sf.name.span());
+        let sf_raw_setter = prefixed_name("set_", &sf.name, "_raw");
+
+        let getter = if sf.is_fallible {
+            quote! {
+                #(#sf_attrs)*
+                #sf_vis fn #sf_name(&self) -> Result<#sf_native_type_ts, ()> {
+                    #assertion
+                    <#sf_native_type_ts as Zorua<#sf_storage_type_ts>>::try_read_bits(
+                        self.#container_name.as_bytes(), #sf_offset)
+                }
+            }
+        } else if is_identity {
+            quote! {
+                #(#sf_attrs)*
+                #sf_vis fn #sf_name(&self) -> #sf_native_type_ts {
+                    #assertion
+                    self.#sf_raw_name()
+                }
+            }
+        } else {
+            quote! {
+                #(#sf_attrs)*
+                #sf_vis fn #sf_name(&self) -> #sf_native_type_ts {
+                    #assertion
+                    <#sf_native_type_ts as Zorua<#sf_storage_type_ts>>::read_bits(
+                        self.#container_name.as_bytes(), #sf_offset)
+                }
+            }
+        };
+
+        let setter = if is_identity {
+            quote! {
+                #(#sf_attrs)*
+                #sf_vis fn #sf_setter(&mut self, val: #sf_native_type_ts) {
+                    self.#sf_raw_setter(val);
+                }
+            }
+        } else {
+            quote! {
+                #(#sf_attrs)*
+                #sf_vis fn #sf_setter(&mut self, val: #sf_native_type_ts) {
+                    <#sf_native_type_ts as Zorua<#sf_storage_type_ts>>::write_bits(
+                        &val, self.#container_name.as_bytes_mut(), #sf_offset);
+                }
+            }
+        };
+
+        quote! {
+            #getter
+            #setter
+
+            #(#sf_attrs)*
+            #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type_ts {
+                <#sf_storage_type_ts as Zorua<#sf_storage_type_ts>>::read_bits(
+                    self.#container_name.as_bytes(), #sf_offset)
+            }
+
+            #(#sf_attrs)*
+            #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type_ts) {
+                <#sf_storage_type_ts as Zorua<#sf_storage_type_ts>>::write_bits(
+                    &val, self.#container_name.as_bytes_mut(), #sf_offset);
+            }
+        }
+    } else {
+        // No `as` — identity access, no raw accessors needed
+        let getter = if sf.is_fallible {
+            quote! {
+                #(#sf_attrs)*
+                #sf_vis fn #sf_name(&self) -> Result<#sf_native_type_ts, ()> {
+                    #assertion
+                    <#sf_native_type_ts as Zorua<#sf_native_type_ts>>::try_read_bits(
+                        self.#container_name.as_bytes(), #sf_offset)
+                }
+            }
+        } else {
+            quote! {
+                #(#sf_attrs)*
+                #sf_vis fn #sf_name(&self) -> #sf_native_type_ts {
+                    #assertion
+                    <#sf_native_type_ts as Zorua<#sf_native_type_ts>>::read_bits(
+                        self.#container_name.as_bytes(), #sf_offset)
+                }
+            }
+        };
+
+        let setter = quote! {
+            #(#sf_attrs)*
+            #sf_vis fn #sf_setter(&mut self, val: #sf_native_type_ts) {
+                <#sf_native_type_ts as Zorua<#sf_native_type_ts>>::write_bits(
+                    &val, self.#container_name.as_bytes_mut(), #sf_offset);
+            }
+        };
+
+        quote! {
+            #getter
+            #setter
+        }
+    }
+}
+
+fn generate_zeroedoption_subfield_accessor(
+    container_name: &Ident,
+    sf: &BitfieldSubfield,
+    is_identity: bool,
+) -> proc_macro2::TokenStream {
+    let sf_attrs = &sf.attrs;
+    let sf_vis = &sf.vis;
+    let sf_name = &sf.name;
+    let sf_setter = prefixed_name("set_", &sf.name, "");
+    let sf_native_type_ts = &sf.native_type;
+    let sf_storage_type_ts = &sf.storage_type;
+    let sf_offset = &sf.bit_offset;
+
+    let sf_raw_name = syn::Ident::new(&format!("{}_raw", sf.name), sf.name.span());
+    let sf_raw_setter = prefixed_name("set_", &sf.name, "_raw");
+
+    let bits_expr = if is_identity {
+        quote! { <#sf_native_type_ts as Zorua<#sf_native_type_ts>>::BITS }
+    } else {
+        quote! { <#sf_native_type_ts as Zorua<#sf_storage_type_ts>>::BITS }
+    };
+
+    let read_native = if is_identity {
+        quote! { <#sf_native_type_ts as Zorua<#sf_native_type_ts>>::read_bits(self.#container_name.as_bytes(), #sf_offset) }
+    } else {
+        quote! { <#sf_native_type_ts as Zorua<#sf_storage_type_ts>>::read_bits(self.#container_name.as_bytes(), #sf_offset) }
+    };
+
+    let write_native = if is_identity {
+        quote! { <#sf_native_type_ts as Zorua<#sf_native_type_ts>>::write_bits(&v, self.#container_name.as_bytes_mut(), #sf_offset) }
+    } else {
+        quote! { <#sf_native_type_ts as Zorua<#sf_storage_type_ts>>::write_bits(&v, self.#container_name.as_bytes_mut(), #sf_offset) }
+    };
+
+    let read_raw = if is_identity {
+        quote! { <#sf_native_type_ts as Zorua<#sf_native_type_ts>>::read_bits(self.#container_name.as_bytes(), #sf_offset) }
+    } else {
+        quote! { <#sf_storage_type_ts as Zorua<#sf_storage_type_ts>>::read_bits(self.#container_name.as_bytes(), #sf_offset) }
+    };
+
+    let raw_type = if is_identity {
+        sf_native_type_ts.clone()
+    } else {
+        sf_storage_type_ts.clone()
+    };
+
+    quote! {
+        #(#sf_attrs)*
+        #sf_vis fn #sf_name(&self) -> Option<#sf_native_type_ts> {
+            if zorua::bits::are_zero(self.#container_name.as_bytes(), #sf_offset, #bits_expr) {
+                None
+            } else {
+                Some(#read_native)
+            }
+        }
+
+        #(#sf_attrs)*
+        #sf_vis fn #sf_setter(&mut self, val: Option<#sf_native_type_ts>) {
+            match val {
+                None => {
+                    // Zero out the bits
+                    zorua::bits::write_u64(self.#container_name.as_bytes_mut(), #sf_offset, #bits_expr, 0);
+                }
+                Some(v) => {
+                    #write_native;
+                }
+            }
+        }
+
+        #(#sf_attrs)*
+        #sf_vis fn #sf_raw_name(&self) -> #raw_type {
+            #read_raw
+        }
+
+        #(#sf_attrs)*
+        #sf_vis fn #sf_raw_setter(&mut self, val: #raw_type) {
+            <#raw_type as Zorua<#raw_type>>::write_bits(&val, self.#container_name.as_bytes_mut(), #sf_offset);
+        }
+    }
+}
+
+fn generate_array_subfield_accessor(
+    container_name: &Ident,
+    sf: &BitfieldSubfield,
+    native_elem: &Type,
+    storage_elem: &Type,
+    elem_is_identity: bool,
+) -> proc_macro2::TokenStream {
+    let sf_attrs = &sf.attrs;
+    let sf_vis = &sf.vis;
+    let sf_name = &sf.name;
+    let sf_setter = prefixed_name("set_", &sf.name, "");
+    let sf_native_type_ts = &sf.native_type;
+    let sf_storage_type_ts = &sf.storage_type;
+    let sf_offset = &sf.bit_offset;
+
+    let assertion = gen_fallibility_assertion(
+        sf.is_fallible,
+        elem_is_identity,
+        sf_name,
+        &quote!(#native_elem),
+        &quote!(#storage_elem),
+    );
+
+    // Determine stride: explicit `stride` keyword, or from Zorua BITS
+    let stride_expr = if let Some(ref stride) = sf.stride {
+        quote! { #stride }
+    } else if elem_is_identity {
+        quote! { <#native_elem as Zorua<#native_elem>>::BITS }
+    } else {
+        quote! { <#native_elem as Zorua<#storage_elem>>::BITS }
+    };
+
+    let getter = if elem_is_identity {
+        quote! {
+            #(#sf_attrs)*
+            #sf_vis fn #sf_name(&self, index: usize) -> #native_elem {
+                #assertion
+                let stride = #stride_expr;
+                <#native_elem as Zorua<#native_elem>>::read_bits(
+                    self.#container_name.as_bytes(), #sf_offset + index * stride)
+            }
+        }
+    } else if sf.is_fallible {
+        quote! {
+            #(#sf_attrs)*
+            #sf_vis fn #sf_name(&self, index: usize) -> Result<#native_elem, ()> {
+                #assertion
+                let stride = #stride_expr;
+                <#native_elem as Zorua<#storage_elem>>::try_read_bits(
+                    self.#container_name.as_bytes(), #sf_offset + index * stride)
+            }
+        }
+    } else {
+        quote! {
+            #(#sf_attrs)*
+            #sf_vis fn #sf_name(&self, index: usize) -> #native_elem {
+                #assertion
+                let stride = #stride_expr;
+                <#native_elem as Zorua<#storage_elem>>::read_bits(
+                    self.#container_name.as_bytes(), #sf_offset + index * stride)
+            }
+        }
+    };
+
+    let setter = if elem_is_identity {
+        quote! {
+            #(#sf_attrs)*
+            #sf_vis fn #sf_setter(&mut self, index: usize, val: #native_elem) {
+                let stride = #stride_expr;
+                <#native_elem as Zorua<#native_elem>>::write_bits(
+                    &val, self.#container_name.as_bytes_mut(), #sf_offset + index * stride);
+            }
+        }
+    } else {
+        quote! {
+            #(#sf_attrs)*
+            #sf_vis fn #sf_setter(&mut self, index: usize, val: #native_elem) {
+                let stride = #stride_expr;
+                <#native_elem as Zorua<#storage_elem>>::write_bits(
+                    &val, self.#container_name.as_bytes_mut(), #sf_offset + index * stride);
+            }
+        }
+    };
+
+    // Raw whole-array accessors (skip when stride is explicit)
+    let raw_accessors = if sf.stride.is_some() {
+        quote! {}
+    } else if sf.has_backing_type {
+        let sf_raw_name = syn::Ident::new(&format!("{}_raw", sf.name), sf.name.span());
+        let sf_raw_setter = prefixed_name("set_", &sf.name, "_raw");
+        quote! {
+            #(#sf_attrs)*
+            #sf_vis fn #sf_raw_name(&self) -> #sf_storage_type_ts {
+                <#sf_storage_type_ts as Zorua<#sf_storage_type_ts>>::read_bits(
+                    self.#container_name.as_bytes(), #sf_offset)
+            }
+            #(#sf_attrs)*
+            #sf_vis fn #sf_raw_setter(&mut self, val: #sf_storage_type_ts) {
+                <#sf_storage_type_ts as Zorua<#sf_storage_type_ts>>::write_bits(
+                    &val, self.#container_name.as_bytes_mut(), #sf_offset);
+            }
+        }
+    } else {
+        let sf_raw_name = syn::Ident::new(&format!("{}_raw", sf.name), sf.name.span());
+        let sf_raw_setter = prefixed_name("set_", &sf.name, "_raw");
+        quote! {
+            #(#sf_attrs)*
+            #sf_vis fn #sf_raw_name(&self) -> #sf_native_type_ts {
+                <#sf_native_type_ts as Zorua<#sf_native_type_ts>>::read_bits(
+                    self.#container_name.as_bytes(), #sf_offset)
+            }
+            #(#sf_attrs)*
+            #sf_vis fn #sf_raw_setter(&mut self, val: #sf_native_type_ts) {
+                <#sf_native_type_ts as Zorua<#sf_native_type_ts>>::write_bits(
+                    &val, self.#container_name.as_bytes_mut(), #sf_offset);
+            }
+        }
+    };
+
+    quote! {
+        #getter
+        #setter
+        #raw_accessors
+    }
 }
