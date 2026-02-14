@@ -297,3 +297,64 @@ impl<T: Zorua<T>, const N: usize> Zorua<[T; N]> for [T; N] {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::prelude::*;
+
+    bitfields! {
+        #[repr(C)]
+        #[derive(ZoruaStruct, Clone, Debug, PartialEq, Eq)]
+        struct Slot {
+            data: u32_le {
+                pub id: u9@0,
+                pub level: u7@9,
+            },
+        }
+    }
+
+    impl Zorua<Slot> for Slot {
+        const BITS: usize = 16;
+        const IS_FALLIBLE: bool = false;
+        fn read_bits(src: &[u8], bit_offset: usize) -> Self {
+            Self { data: u32_le::new(bits::read_u64(src, bit_offset, 16) as u32) }
+        }
+        fn write_bits(&self, dst: &mut [u8], bit_offset: usize) {
+            bits::write_u64(dst, bit_offset, 16, self.data.value() as u64);
+        }
+    }
+
+    bitfields! {
+        #[repr(C)]
+        #[derive(ZoruaStruct, Clone, Debug, PartialEq, Eq)]
+        struct Container {
+            data: [u8; 16] {
+                #[zeroedoption]
+                pub slots: [Slot; 4]@8,
+            },
+        }
+    }
+
+    #[test]
+    fn test_zeroedoption_array_subfield() {
+        let mut c = Container { data: [0u8; 16] };
+
+        // All slots start as None
+        assert!(c.slots(0).is_none());
+        assert!(c.slots(1).is_none());
+
+        // Write a slot
+        let mut slot = Slot { data: u32_le::new(0) };
+        slot.set_id(u9::new(42));
+        slot.set_level(u7::new(5));
+        c.set_slots(0, Some(slot.clone()));
+
+        assert_eq!(c.slots(0).unwrap().id(), u9::new(42));
+        assert_eq!(c.slots(0).unwrap().level(), u7::new(5));
+        assert!(c.slots(1).is_none());
+
+        // Clear a slot
+        c.set_slots(0, None);
+        assert!(c.slots(0).is_none());
+    }
+}

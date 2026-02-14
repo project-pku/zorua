@@ -198,9 +198,9 @@ fn impl_zorua_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, sy
 
         // For the read path: extract the raw value for matching
         let read_val = if *is_endian {
-            quote! { (zorua::bits::read_u64(src, bit_offset, #bits) as #cast_repr) }
+            quote! { (bits::read_u64(src, bit_offset, #bits) as #cast_repr) }
         } else {
-            quote! { (zorua::bits::read_u64(src, bit_offset, #bits) as #cast_repr) }
+            quote! { (bits::read_u64(src, bit_offset, #bits) as #cast_repr) }
         };
 
         // For the write path: convert enum to bits
@@ -241,7 +241,7 @@ fn impl_zorua_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, sy
                 #try_read_impl
 
                 fn write_bits(&self, dst: &mut [u8], bit_offset: usize) {
-                    zorua::bits::write_u64(dst, bit_offset, #bits, #write_val);
+                    bits::write_u64(dst, bit_offset, #bits, #write_val);
                 }
             }
         });
@@ -916,12 +916,12 @@ fn generate_zorua_struct(input: ZoruaStructDef) -> Result<TokenStream, syn::Erro
                 fn read_bits(src: &[u8], bit_offset: usize) -> Self {
                     // SAFETY: All-zeros is valid for POD types used with bits annotation
                     let mut s: Self = unsafe { core::mem::zeroed() };
-                    zorua::bits::copy(src, bit_offset, s.as_bytes_mut(), 0, #bits_expr);
+                    bits::copy(src, bit_offset, s.as_bytes_mut(), 0, #bits_expr);
                     s
                 }
 
                 fn write_bits(&self, dst: &mut [u8], bit_offset: usize) {
-                    zorua::bits::copy(self.as_bytes(), 0, dst, bit_offset, #bits_expr);
+                    bits::copy(self.as_bytes(), 0, dst, bit_offset, #bits_expr);
                 }
             }
         }
@@ -1002,9 +1002,15 @@ fn generate_subfield_accessor(
         };
         let elem_is_identity = quote!(#native_elem).to_string() == quote!(#storage_elem).to_string();
 
-        generate_array_subfield_accessor(
-            container_name, sf, native_elem, storage_elem, elem_is_identity,
-        )
+        if sf.is_zeroedoption {
+            generate_zeroedoption_array_subfield_accessor(
+                container_name, sf, native_elem, storage_elem, elem_is_identity,
+            )
+        } else {
+            generate_array_subfield_accessor(
+                container_name, sf, native_elem, storage_elem, elem_is_identity,
+            )
+        }
     } else if sf.is_zeroedoption {
         // Zeroedoption subfield
         generate_zeroedoption_subfield_accessor(container_name, sf, is_identity)
@@ -1187,7 +1193,7 @@ fn generate_zeroedoption_subfield_accessor(
     quote! {
         #(#sf_attrs)*
         #sf_vis fn #sf_name(&self) -> Option<#sf_native_type_ts> {
-            if zorua::bits::are_zero(self.#container_name.as_bytes(), #sf_offset, #bits_expr) {
+            if bits::are_zero(self.#container_name.as_bytes(), #sf_offset, #bits_expr) {
                 None
             } else {
                 Some(#read_native)
@@ -1199,7 +1205,7 @@ fn generate_zeroedoption_subfield_accessor(
             match val {
                 None => {
                     // Zero out the bits
-                    zorua::bits::write_u64(self.#container_name.as_bytes_mut(), #sf_offset, #bits_expr, 0);
+                    bits::write_u64(self.#container_name.as_bytes_mut(), #sf_offset, #bits_expr, 0);
                 }
                 Some(v) => {
                     #write_native;
@@ -1215,6 +1221,76 @@ fn generate_zeroedoption_subfield_accessor(
         #(#sf_attrs)*
         #sf_vis fn #sf_raw_setter(&mut self, val: #raw_type) {
             <#raw_type as Zorua<#raw_type>>::write_bits(&val, self.#container_name.as_bytes_mut(), #sf_offset);
+        }
+    }
+}
+
+fn generate_zeroedoption_array_subfield_accessor(
+    container_name: &Ident,
+    sf: &BitfieldSubfield,
+    native_elem: &Type,
+    storage_elem: &Type,
+    elem_is_identity: bool,
+) -> proc_macro2::TokenStream {
+    let sf_attrs = &sf.attrs;
+    let sf_vis = &sf.vis;
+    let sf_name = &sf.name;
+    let sf_setter = prefixed_name("set_", &sf.name, "");
+    let sf_offset = &sf.bit_offset;
+
+    // Determine stride and element BITS
+    let (stride_expr, bits_expr) = if elem_is_identity {
+        (
+            quote! { <#native_elem as Zorua<#native_elem>>::BITS },
+            quote! { <#native_elem as Zorua<#native_elem>>::BITS },
+        )
+    } else {
+        (
+            quote! { <#native_elem as Zorua<#storage_elem>>::BITS },
+            quote! { <#native_elem as Zorua<#storage_elem>>::BITS },
+        )
+    };
+
+    let read_elem = if elem_is_identity {
+        quote! { <#native_elem as Zorua<#native_elem>>::read_bits(
+            self.#container_name.as_bytes(), elem_offset) }
+    } else {
+        quote! { <#native_elem as Zorua<#storage_elem>>::read_bits(
+            self.#container_name.as_bytes(), elem_offset) }
+    };
+
+    let write_elem = if elem_is_identity {
+        quote! { <#native_elem as Zorua<#native_elem>>::write_bits(
+            &v, self.#container_name.as_bytes_mut(), elem_offset) }
+    } else {
+        quote! { <#native_elem as Zorua<#storage_elem>>::write_bits(
+            &v, self.#container_name.as_bytes_mut(), elem_offset) }
+    };
+
+    quote! {
+        #(#sf_attrs)*
+        #sf_vis fn #sf_name(&self, index: usize) -> Option<#native_elem> {
+            let stride = #stride_expr;
+            let elem_offset = #sf_offset + index * stride;
+            if bits::are_zero(self.#container_name.as_bytes(), elem_offset, #bits_expr) {
+                None
+            } else {
+                Some(#read_elem)
+            }
+        }
+
+        #(#sf_attrs)*
+        #sf_vis fn #sf_setter(&mut self, index: usize, val: Option<#native_elem>) {
+            let stride = #stride_expr;
+            let elem_offset = #sf_offset + index * stride;
+            match val {
+                None => {
+                    bits::zero(self.#container_name.as_bytes_mut(), elem_offset, #bits_expr);
+                }
+                Some(v) => {
+                    #write_elem;
+                }
+            }
         }
     }
 }
