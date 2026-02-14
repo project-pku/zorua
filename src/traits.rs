@@ -133,8 +133,8 @@ pub trait Zorua<S>: Sized + Clone {
     /// Read from bit-packed bytes at an arbitrary bit offset.
     fn read_bits(src: &[u8], bit_offset: usize) -> Self;
 
-    /// Try to read from bit-packed bytes. Returns Err(()) on invalid data.
-    fn try_read_bits(src: &[u8], bit_offset: usize) -> Result<Self, ()> {
+    /// Try to read from bit-packed bytes. Returns Err(raw_value) on invalid data.
+    fn try_read_bits(src: &[u8], bit_offset: usize) -> Result<Self, S> {
         Ok(Self::read_bits(src, bit_offset))
     }
 

@@ -212,11 +212,11 @@ fn impl_zorua_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, sy
         // try_read_bits for fallible
         let try_read_impl = if is_fallible {
             quote! {
-                fn try_read_bits(src: &[u8], bit_offset: usize) -> Result<Self, ()> {
+                fn try_read_bits(src: &[u8], bit_offset: usize) -> Result<Self, #target_ty> {
                     let raw = #read_val;
                     match raw {
                         #try_match_arms
-                        _ => Err(()),
+                        _ => Err(<#target_ty as Zorua<#target_ty>>::read_bits(src, bit_offset)),
                     }
                 }
             }
@@ -295,8 +295,8 @@ fn impl_zorua_struct(
                 Self(<#wrapped_ty as Zorua<#wrapped_ty>>::read_bits(src, bit_offset))
             }
 
-            fn try_read_bits(src: &[u8], bit_offset: usize) -> Result<Self, ()> {
-                <#wrapped_ty as Zorua<#wrapped_ty>>::try_read_bits(src, bit_offset).map(Self)
+            fn try_read_bits(src: &[u8], bit_offset: usize) -> Result<Self, #ident #type_generics> {
+                <#wrapped_ty as Zorua<#wrapped_ty>>::try_read_bits(src, bit_offset).map(Self).map_err(Self)
             }
 
             fn write_bits(&self, dst: &mut [u8], bit_offset: usize) {
@@ -342,7 +342,7 @@ fn impl_zorua_struct(
                         Self(<#wrapped_ty as Zorua<#storage_ty>>::read_bits(src, bit_offset))
                     }
 
-                    fn try_read_bits(src: &[u8], bit_offset: usize) -> Result<Self, ()> {
+                    fn try_read_bits(src: &[u8], bit_offset: usize) -> Result<Self, #storage_ty> {
                         <#wrapped_ty as Zorua<#storage_ty>>::try_read_bits(src, bit_offset).map(Self)
                     }
 
@@ -774,7 +774,7 @@ fn generate_zorua_struct(input: ZoruaStructDef) -> Result<TokenStream, syn::Erro
                     }
                 } else if f.is_fallible {
                     quote! {
-                        #field_vis fn #field_name(&self, index: usize) -> Result<#native_elem, ()> {
+                        #field_vis fn #field_name(&self, index: usize) -> Result<#native_elem, #storage_elem> {
                             #assertion
                             <#native_elem as Zorua<#storage_elem>>::try_read_bits(
                                 self.#field_raw_name[index].as_bytes(), 0)
@@ -820,7 +820,7 @@ fn generate_zorua_struct(input: ZoruaStructDef) -> Result<TokenStream, syn::Erro
                     }
                 } else if f.is_fallible {
                     quote! {
-                        #field_vis fn #field_name(&self) -> Result<#field_native_type, ()> {
+                        #field_vis fn #field_name(&self) -> Result<#field_native_type, #field_storage_type> {
                             #assertion
                             <#field_native_type as Zorua<#field_storage_type>>::try_read_bits(
                                 self.#field_raw_name.as_bytes(), 0)
@@ -1049,7 +1049,7 @@ fn generate_scalar_subfield_accessor(
         let getter = if sf.is_fallible {
             quote! {
                 #(#sf_attrs)*
-                #sf_vis fn #sf_name(&self) -> Result<#sf_native_type_ts, ()> {
+                #sf_vis fn #sf_name(&self) -> Result<#sf_native_type_ts, #sf_storage_type_ts> {
                     #assertion
                     <#sf_native_type_ts as Zorua<#sf_storage_type_ts>>::try_read_bits(
                         self.#container_name.as_bytes(), #sf_offset)
@@ -1112,7 +1112,7 @@ fn generate_scalar_subfield_accessor(
         let getter = if sf.is_fallible {
             quote! {
                 #(#sf_attrs)*
-                #sf_vis fn #sf_name(&self) -> Result<#sf_native_type_ts, ()> {
+                #sf_vis fn #sf_name(&self) -> Result<#sf_native_type_ts, #sf_native_type_ts> {
                     #assertion
                     <#sf_native_type_ts as Zorua<#sf_native_type_ts>>::try_read_bits(
                         self.#container_name.as_bytes(), #sf_offset)
@@ -1340,7 +1340,7 @@ fn generate_array_subfield_accessor(
     } else if sf.is_fallible {
         quote! {
             #(#sf_attrs)*
-            #sf_vis fn #sf_name(&self, index: usize) -> Result<#native_elem, ()> {
+            #sf_vis fn #sf_name(&self, index: usize) -> Result<#native_elem, #storage_elem> {
                 #assertion
                 let stride = #stride_expr;
                 <#native_elem as Zorua<#storage_elem>>::try_read_bits(
