@@ -306,12 +306,12 @@ fn impl_zorua_struct(
     };
 
     // Delegation impls for known storage types.
-    // Only generated for generic newtypes (has type parameters).
-    // For concrete newtypes (no generics), Rust rejects conditional impls
-    // with provably-unsatisfied bounds (issue #48214), so we skip them.
     let mut delegation_impls = quote! {};
 
     if !ast.generics.params.is_empty() {
+        // Generic newtypes: emit conditional impls for all known storage types.
+        // The `where T: Zorua<S>` bounds are not provably unsatisfied because `T`
+        // is a type parameter, so Rust accepts them.
         let storage_types: &[&str] = &[
             "bool",
             "u1", "u2", "u3", "u4", "u5", "u6", "u7",
@@ -348,6 +348,42 @@ fn impl_zorua_struct(
 
                     fn write_bits(&self, dst: &mut [u8], bit_offset: usize) {
                         <#wrapped_ty as Zorua<#storage_ty>>::write_bits(&self.0, dst, bit_offset);
+                    }
+                }
+            });
+        }
+    } else {
+        // Concrete newtypes: can't emit conditional impls for all storage types
+        // because Rust rejects `where` clauses with provably-unsatisfied bounds
+        // (issue #48214). However, for inner types that have endian cross-impls
+        // (u16, u32, u64), we can emit a single generic impl parameterized by
+        // `E: Endian` — no `where` clause needed since the cross-impl always exists.
+        use quote::format_ident;
+
+        let inner_str = quote!(#wrapped_ty).to_string();
+        let endian_wrapper = match inner_str.as_str() {
+            "u16" => Some(format_ident!("U16")),
+            "u32" => Some(format_ident!("U32")),
+            "u64" => Some(format_ident!("U64")),
+            _ => None,
+        };
+
+        if let Some(wrapper) = endian_wrapper {
+            delegation_impls.extend(quote! {
+                impl<E: Endian> Zorua<#wrapper<E>> for #ident {
+                    const BITS: usize = <#wrapped_ty as Zorua<#wrapper<E>>>::BITS;
+                    const IS_FALLIBLE: bool = <#wrapped_ty as Zorua<#wrapper<E>>>::IS_FALLIBLE;
+
+                    fn read_bits(src: &[u8], bit_offset: usize) -> Self {
+                        Self(<#wrapped_ty as Zorua<#wrapper<E>>>::read_bits(src, bit_offset))
+                    }
+
+                    fn try_read_bits(src: &[u8], bit_offset: usize) -> Result<Self, #wrapper<E>> {
+                        <#wrapped_ty as Zorua<#wrapper<E>>>::try_read_bits(src, bit_offset).map(Self)
+                    }
+
+                    fn write_bits(&self, dst: &mut [u8], bit_offset: usize) {
+                        <#wrapped_ty as Zorua<#wrapper<E>>>::write_bits(&self.0, dst, bit_offset);
                     }
                 }
             });
