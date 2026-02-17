@@ -101,10 +101,12 @@ fn impl_zorua_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, sy
         (syn::parse_str("u8").unwrap(), 8)
     } else if repr_state.repr_u16 {
         (syn::parse_str("u16").unwrap(), 16)
+    } else if repr_state.repr_u32 {
+        (syn::parse_str("u32").unwrap(), 32)
     } else {
         return Err(syn::Error::new_spanned(
             &ast.ident,
-            "Zorua requires #[repr(u8)] or #[repr(u16)] for enums",
+            "Zorua requires #[repr(u8)], #[repr(u16)], or #[repr(u32)] for enums",
         ));
     };
 
@@ -174,6 +176,16 @@ fn impl_zorua_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, sy
         all_types.push((syn::parse_str("u16").unwrap(), false, 16));
         all_types.push((syn::parse_str("u16_le").unwrap(), true, 16));
         all_types.push((syn::parse_str("u16_be").unwrap(), true, 16));
+    }
+
+    // ux2 types 17-31 for repr(u32)
+    if max_bits >= 32 {
+        for bits in 17.max(min_bits)..32 {
+            let ty_name = format!("u{}", bits);
+            if let Ok(ty) = syn::parse_str::<Type>(&ty_name) {
+                all_types.push((ty, false, bits));
+            }
+        }
     }
 
     // Wider types
@@ -438,6 +450,7 @@ struct ReprState {
     repr_c: bool,
     repr_u8: bool,
     repr_u16: bool,
+    repr_u32: bool,
     repr_transparent: bool,
     repr_packed: Option<usize>,
 }
@@ -446,6 +459,7 @@ fn get_repr_state(attrs: &[Attribute]) -> Result<ReprState, syn::Error> {
     let mut repr_c = false;
     let mut repr_u8 = false;
     let mut repr_u16 = false;
+    let mut repr_u32 = false;
     let mut repr_transparent = false;
     let mut repr_packed = None::<usize>;
     for attr in attrs {
@@ -461,6 +475,10 @@ fn get_repr_state(attrs: &[Attribute]) -> Result<ReprState, syn::Error> {
                 }
                 if meta.path.is_ident("u16") {
                     repr_u16 = true;
+                    return Ok(());
+                }
+                if meta.path.is_ident("u32") {
+                    repr_u32 = true;
                     return Ok(());
                 }
                 if meta.path.is_ident("transparent") {
@@ -488,6 +506,7 @@ fn get_repr_state(attrs: &[Attribute]) -> Result<ReprState, syn::Error> {
         repr_c,
         repr_u8,
         repr_u16,
+        repr_u32,
         repr_transparent,
         repr_packed,
     })
