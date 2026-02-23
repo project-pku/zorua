@@ -615,6 +615,17 @@ impl Parse for ZoruaFieldDef {
             None
         };
 
+        if is_fallible && !has_backing_type {
+            return Err(syn::Error::new(
+                name.span(),
+                format!(
+                    "Field `{}` marked #[fallible] but has no `as` storage type, \
+                     so the annotation has no effect.",
+                    name
+                ),
+            ));
+        }
+
         Ok(ZoruaFieldDef {
             attrs,
             vis,
@@ -709,6 +720,17 @@ impl Parse for BitfieldSubfield {
         } else {
             None
         };
+
+        if is_fallible && !has_backing_type {
+            return Err(syn::Error::new(
+                name.span(),
+                format!(
+                    "Subfield `{}` marked #[fallible] but has no `as` storage type, \
+                     so the annotation has no effect.",
+                    name
+                ),
+            ));
+        }
 
         Ok(BitfieldSubfield {
             attrs,
