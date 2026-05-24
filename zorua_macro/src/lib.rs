@@ -2,9 +2,10 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
     Attribute, Data, DataEnum, DataStruct, DeriveInput, Expr, Ident, LitInt, Token, Type,
-    Visibility, braced, token,
+    Visibility, braced,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
+    token,
 };
 
 /// Formats a prefixed/suffixed identifier, moving leading underscores before the prefix.
@@ -41,7 +42,10 @@ pub fn zorua_struct_derive_macro(item: TokenStream) -> TokenStream {
     result.unwrap_or_else(|e| e.into_compile_error().into())
 }
 
-fn impl_zoruastruct_struct(ast: &DeriveInput, data: &DataStruct) -> Result<TokenStream, syn::Error> {
+fn impl_zoruastruct_struct(
+    ast: &DeriveInput,
+    data: &DataStruct,
+) -> Result<TokenStream, syn::Error> {
     if (data.fields.len() > 1) && !get_repr_state(&ast.attrs)?.repr_c {
         return Err(syn::Error::new_spanned(
             &ast.ident,
@@ -200,7 +204,7 @@ fn impl_zorua_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, sy
 
     let mut impls = quote! {};
 
-    for (target_ty, is_endian, bits) in &all_types {
+    for (target_ty, _is_endian, bits) in &all_types {
         let bits = *bits;
         let is_fallible = if bits >= 64 {
             true
@@ -209,11 +213,7 @@ fn impl_zorua_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, sy
         };
 
         // For the read path: extract the raw value for matching
-        let read_val = if *is_endian {
-            quote! { (bits::read_u64(src, bit_offset, #bits) as #cast_repr) }
-        } else {
-            quote! { (bits::read_u64(src, bit_offset, #bits) as #cast_repr) }
-        };
+        let read_val = quote! { (bits::read_u64(src, bit_offset, #bits) as #cast_repr) };
 
         // For the write path: convert enum to bits
         // Use unsafe transmute of the discriminant to handle non-Copy enums
@@ -262,10 +262,7 @@ fn impl_zorua_enum(ast: &DeriveInput, data: &DataEnum) -> Result<TokenStream, sy
     Ok(impls.into())
 }
 
-fn impl_zorua_struct(
-    ast: &DeriveInput,
-    data: &DataStruct,
-) -> Result<TokenStream, syn::Error> {
+fn impl_zorua_struct(ast: &DeriveInput, data: &DataStruct) -> Result<TokenStream, syn::Error> {
     if data.fields.len() != 1 {
         return Err(syn::Error::new_spanned(
             &ast.ident,
@@ -325,17 +322,10 @@ fn impl_zorua_struct(
         // The `where T: Zorua<S>` bounds are not provably unsatisfied because `T`
         // is a type parameter, so Rust accepts them.
         let storage_types: &[&str] = &[
-            "bool",
-            "u1", "u2", "u3", "u4", "u5", "u6", "u7",
-            "u8",
-            "u9", "u10", "u11", "u12", "u13", "u14", "u15",
-            "u16",
-            "u17", "u18", "u19", "u20", "u21", "u22", "u23", "u24",
-            "u25", "u26", "u27", "u28", "u29", "u30", "u31",
-            "u32", "u64",
-            "u16_le", "u16_be",
-            "u32_le", "u32_be",
-            "u64_le", "u64_be",
+            "bool", "u1", "u2", "u3", "u4", "u5", "u6", "u7", "u8", "u9", "u10", "u11", "u12",
+            "u13", "u14", "u15", "u16", "u17", "u18", "u19", "u20", "u21", "u22", "u23", "u24",
+            "u25", "u26", "u27", "u28", "u29", "u30", "u31", "u32", "u64", "u16_le", "u16_be",
+            "u32_le", "u32_be", "u64_le", "u64_be",
         ];
 
         for ty_name in storage_types {
@@ -578,11 +568,12 @@ impl Parse for ZoruaFieldDef {
             if input.is_empty() {
                 break;
             }
-            if depth == 0 {
-                if input.peek(Token![as]) || input.peek(syn::token::Brace) || input.peek(Token![,])
-                {
-                    break;
-                }
+            if depth == 0
+                && (input.peek(Token![as])
+                    || input.peek(syn::token::Brace)
+                    || input.peek(Token![,]))
+            {
+                break;
             }
             if input.peek(Token![<]) {
                 depth += 1;
@@ -648,10 +639,7 @@ impl Parse for BitfieldSubfield {
 
         let attrs: Vec<_> = all_attrs
             .into_iter()
-            .filter(|a| {
-                !a.path().is_ident("fallible")
-                    && !a.path().is_ident("zeroedoption")
-            })
+            .filter(|a| !a.path().is_ident("fallible") && !a.path().is_ident("zeroedoption"))
             .collect();
 
         let vis: Visibility = input.parse()?;
@@ -666,10 +654,10 @@ impl Parse for BitfieldSubfield {
             if input.is_empty() {
                 break;
             }
-            if depth == 0 {
-                if input.peek(Token![as]) || input.peek(Token![@]) || input.peek(Token![,]) {
-                    break;
-                }
+            if depth == 0
+                && (input.peek(Token![as]) || input.peek(Token![@]) || input.peek(Token![,]))
+            {
+                break;
             }
             if input.peek(Token![<]) {
                 depth += 1;
@@ -998,7 +986,7 @@ fn generate_zorua_struct(input: ZoruaStructDef) -> Result<TokenStream, syn::Erro
 
                 subfields
                     .iter()
-                    .filter_map(move |sf| {
+                    .map(move |sf| {
                         // Determine this field's resolved offset and optional assertion.
                         let (resolved_offset, offset_assertion) =
                             if let Some(ref explicit) = sf.bit_offset {
@@ -1016,12 +1004,12 @@ fn generate_zorua_struct(input: ZoruaStructDef) -> Result<TokenStream, syn::Erro
                         let prev = current_offset.clone();
                         current_offset = quote! { #prev + #bits_expr };
 
-                        Some(generate_subfield_accessor_with_assert(
+                        generate_subfield_accessor_with_assert(
                             &container_name,
                             sf,
                             &resolved_offset,
                             &offset_assertion,
-                        ))
+                        )
                     })
                     .collect::<Vec<_>>()
             })
@@ -1170,7 +1158,8 @@ fn generate_subfield_accessor(
     let sf_native_type: Type = syn::parse2(sf_native_type_ts.clone()).unwrap();
     let sf_storage_type: Type = syn::parse2(sf_storage_type_ts.clone()).unwrap();
 
-    let is_identity = quote!(#sf_native_type_ts).to_string() == quote!(#sf_storage_type_ts).to_string();
+    let is_identity =
+        quote!(#sf_native_type_ts).to_string() == quote!(#sf_storage_type_ts).to_string();
 
     if let Some(native_elem) = deconstruct_array(&sf_native_type) {
         // Array subfield
@@ -1179,15 +1168,24 @@ fn generate_subfield_accessor(
         } else {
             native_elem
         };
-        let elem_is_identity = quote!(#native_elem).to_string() == quote!(#storage_elem).to_string();
+        let elem_is_identity =
+            quote!(#native_elem).to_string() == quote!(#storage_elem).to_string();
 
         if sf.is_zeroedoption {
             generate_zeroedoption_array_subfield_accessor(
-                container_name, sf, native_elem, storage_elem, elem_is_identity,
+                container_name,
+                sf,
+                native_elem,
+                storage_elem,
+                elem_is_identity,
             )
         } else {
             generate_array_subfield_accessor(
-                container_name, sf, native_elem, storage_elem, elem_is_identity,
+                container_name,
+                sf,
+                native_elem,
+                storage_elem,
+                elem_is_identity,
             )
         }
     } else if sf.is_zeroedoption {
@@ -1436,18 +1434,18 @@ fn generate_zeroedoption_array_subfield_accessor(
 
     let read_elem = if elem_is_identity {
         quote! { <#native_elem as Zorua<#native_elem>>::read_bits(
-            self.#container_name.as_bytes(), elem_offset) }
+        self.#container_name.as_bytes(), elem_offset) }
     } else {
         quote! { <#native_elem as Zorua<#storage_elem>>::read_bits(
-            self.#container_name.as_bytes(), elem_offset) }
+        self.#container_name.as_bytes(), elem_offset) }
     };
 
     let write_elem = if elem_is_identity {
         quote! { <#native_elem as Zorua<#native_elem>>::write_bits(
-            &v, self.#container_name.as_bytes_mut(), elem_offset) }
+        &v, self.#container_name.as_bytes_mut(), elem_offset) }
     } else {
         quote! { <#native_elem as Zorua<#storage_elem>>::write_bits(
-            &v, self.#container_name.as_bytes_mut(), elem_offset) }
+        &v, self.#container_name.as_bytes_mut(), elem_offset) }
     };
 
     quote! {
